@@ -32,6 +32,13 @@ desktop.ini
 *.wav
 *.flac
 
+# Google Drive credentials — never commit
+config/credentials.json
+config/google_token.json
+
+# Music cache downloaded from Drive
+music_cache/
+
 # Logs
 logs/*.log
 logs/*.json

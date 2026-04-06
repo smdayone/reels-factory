@@ -6,11 +6,14 @@ load_dotenv()
 
 # Base paths
 BASE_DIR = Path(__file__).parent.parent
-MUSIC_DIR = BASE_DIR / "music"
 
 # SSD paths (Windows NTFS)
 SSD_DRIVE = os.getenv("SSD_DRIVE", "D")
-SSD_BASE = Path(f"{SSD_DRIVE}:\\Product Reels")
+SSD_BASE  = Path(f"{SSD_DRIVE}:\\Products Reels")
+
+# Music folder — scanned recursively, subfolders supported
+# Default: D:\Music for Shorts  (change via MUSIC_FOLDER in .env)
+MUSIC_DIR = Path(os.getenv("MUSIC_FOLDER", f"{SSD_DRIVE}:\\Music for Shorts"))
 
 def get_keyword_paths(keyword: str) -> dict:
     """Return all paths for a given keyword."""
@@ -61,6 +64,19 @@ SCENE_THRESHOLD  = float(os.getenv("SCENE_THRESHOLD", 0.4))
 
 # System safety
 RAM_SAFETY_GB = float(os.getenv("RAM_SAFETY_GB", 2))
+
+# Max duration used from each individual clip (seconds).
+# Long clips are trimmed to this value — keeps cuts fast and dynamic.
+# A 36s clip with MAX_CLIP_DURATION=6 contributes only 6s to the total.
+MAX_CLIP_DURATION = float(os.getenv("MAX_CLIP_DURATION", 6))
+
+# Background music volume (0.0 – 1.0). Keep low so voice stays audible.
+MUSIC_VOLUME = float(os.getenv("MUSIC_VOLUME", 0.07))
+
+# Music source
+MUSIC_SOURCE          = os.getenv("MUSIC_SOURCE", "local")   # "local" or "drive"
+DRIVE_MUSIC_FOLDER_ID = os.getenv("DRIVE_MUSIC_FOLDER_ID", "")
+MUSIC_CACHE_DIR       = Path(os.getenv("MUSIC_CACHE_DIR", str(BASE_DIR / "music_cache")))
 
 # Clip category keywords for transcript-based classification
 CLIP_KEYWORDS = {

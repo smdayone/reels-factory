@@ -2,79 +2,145 @@
 Assemble final video from extracted clips + voice + music.
 Uses MoviePy for composition, FFmpeg for final encoding.
 """
-import random
+# Fix PIL.Image.ANTIALIAS removed in Pillow 10+ (breaks MoviePy 1.0.3)
+import PIL.Image
+if not hasattr(PIL.Image, "ANTIALIAS"):
+    PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
+
 from pathlib import Path
 from datetime import datetime
 from moviepy.editor import (
-    VideoFileClip, AudioFileClip, CompositeVideoClip,
+    VideoFileClip, AudioFileClip,
     CompositeAudioClip, concatenate_videoclips
 )
 from config.settings import (
-    TARGET_DURATION, MIN_CLIP_DURATION,
-    get_keyword_paths, MUSIC_DIR
+    TARGET_DURATION, MIN_CLIP_DURATION, MAX_CLIP_DURATION, MUSIC_VOLUME,
+    get_keyword_paths, MUSIC_DIR, MUSIC_SOURCE
 )
 from src.utils.system_check import check_ram
 from rich.console import Console
 
 console = Console()
 
-# Assembly order: which clip categories to use and in what order
-ASSEMBLY_ORDER = ["hook", "problem", "solution", "demo", "cta"]
+# Assembly order: categories used in final video, in sequence.
+# "unclassified" is last — used as filler when primary categories are empty.
+ASSEMBLY_ORDER = ["hook", "problem", "solution", "demo", "cta", "unboxing", "unclassified"]
 
 
-def select_clips(keyword: str, max_total_duration: int = TARGET_DURATION) -> list[Path]:
-    """
-    Select clips from category folders following ASSEMBLY_ORDER.
-    Tries to fill TARGET_DURATION seconds.
-    """
+def get_clips_inventory(keyword: str) -> dict[str, list[Path]]:
+    """Return all available clips per category for this keyword."""
     paths = get_keyword_paths(keyword)
-    selected = []
-    total = 0
+    return {
+        cat: sorted(clip_dir.glob("*.mp4"))
+        for cat, clip_dir in paths["clips"].items()
+    }
 
+
+def select_clips(
+    keyword: str,
+    variation: int = 0,
+    target_duration: float = TARGET_DURATION,
+) -> list[Path]:
+    """
+    Build a clip sequence to fill target_duration seconds.
+
+    Each clip contributes at most MAX_CLIP_DURATION seconds to the count,
+    so a 36s clip counts as 6s — forcing the system to pick many more clips
+    and produce fast, dynamic cuts typical of short-form video.
+
+    Clips are drawn from all categories in ASSEMBLY_ORDER.  Within each
+    category the list is rotated by `variation` so every generated video
+    starts from a different clip.  The pool is iterated until the budget
+    (target_duration) is filled.
+    """
+    inventory = get_clips_inventory(keyword)
+
+    # Build a flat ordered pool: all categories in sequence, each rotated
+    pool: list[Path] = []
     for category in ASSEMBLY_ORDER:
-        clip_dir = paths["clips"][category]
-        available = sorted(clip_dir.glob("*.mp4"))
-        if not available:
+        clips = inventory.get(category, [])
+        if not clips:
+            continue
+        start = variation % len(clips)
+        pool.extend(clips[start:] + clips[:start])
+
+    selected: list[Path] = []
+    total = 0.0
+    seen: set[str] = set()
+
+    for clip_path in pool:
+        if total >= target_duration:
+            break
+        key = str(clip_path)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            clip = VideoFileClip(str(clip_path))
+            raw_dur = clip.duration
+            clip.close()
+            if raw_dur < MIN_CLIP_DURATION:
+                continue
+            # Count only the trimmed portion toward the budget
+            effective = min(raw_dur, MAX_CLIP_DURATION)
+            selected.append(clip_path)
+            total += effective
+        except Exception:
             continue
 
-        # Pick best clip (shortest that's above MIN_CLIP_DURATION)
-        for clip_path in available:
-            try:
-                clip = VideoFileClip(str(clip_path))
-                duration = clip.duration
-                clip.close()
-                if duration >= MIN_CLIP_DURATION and total + duration <= max_total_duration:
-                    selected.append(clip_path)
-                    total += duration
-                    break
-            except Exception:
-                continue
-
-        if total >= max_total_duration:
-            break
-
-    console.print(f"  Selected {len(selected)} clips — total: {total:.1f}s")
+    console.print(
+        f"  Selected [bold]{len(selected)}[/bold] clips — "
+        f"~{total:.1f}s effective  |  target: {target_duration:.0f}s  |  "
+        f"max {MAX_CLIP_DURATION:.0f}s/clip"
+    )
     return selected
 
 
-def get_background_music() -> Path | None:
-    """Pick a random royalty-free music file from music/ folder."""
-    music_files = list(MUSIC_DIR.glob("*.mp3")) + list(MUSIC_DIR.glob("*.wav"))
-    if not music_files:
-        console.print("  [yellow]No music files in music/ folder — assembling without music[/yellow]")
+def get_background_music(variation: int = 0) -> Path | None:
+    """
+    Pick a music file, cycling through available tracks by variation index.
+    Source is determined by MUSIC_SOURCE in .env:
+      "drive" — fetches from Google Drive folder (with local cache)
+      "local" — reads from the music/ folder inside the project (default)
+    """
+    if MUSIC_SOURCE == "drive":
+        from src.utils.drive_music import get_drive_music
+        return get_drive_music(variation)
+
+    # Local: scan MUSIC_DIR recursively so subfolders (genre/mood) are included
+    if not MUSIC_DIR.exists():
+        console.print(f"  [yellow]Music folder not found: {MUSIC_DIR}[/yellow]")
         return None
-    return random.choice(music_files)
+
+    music_files = sorted(
+        list(MUSIC_DIR.rglob("*.mp3")) +
+        list(MUSIC_DIR.rglob("*.wav")) +
+        list(MUSIC_DIR.rglob("*.m4a"))
+    )
+    if not music_files:
+        console.print(f"  [yellow]No music files found in {MUSIC_DIR}[/yellow]")
+        return None
+
+    chosen = music_files[variation % len(music_files)]
+    console.print(
+        f"  Music: [cyan]{chosen.parent.name}/{chosen.name}[/cyan] "
+        f"({variation % len(music_files) + 1}/{len(music_files)})"
+    )
+    return chosen
 
 
 def assemble_video(
     keyword: str,
     clip_paths: list[Path],
     voice_path: Path | None = None,
-    script: dict | None = None,
+    variation: int = 0,
+    target_duration: float = TARGET_DURATION,
 ) -> Path | None:
     """
-    Assemble final video.
-    Returns path to output file.
+    Assemble final vertical video (1080x1920, 30fps).
+    Returns path to output file, or None on failure.
+    variation:        used to pick a different music track per video.
+    target_duration:  hard cap — video is trimmed to this length if clips overshoot.
     """
     if not check_ram("video assembly"):
         return None
@@ -92,13 +158,14 @@ def assemble_video(
     console.print(f"  Assembling {len(clip_paths)} clips...")
 
     try:
-        # Load and resize clips to 9:16 (1080x1920)
+        # Load, trim to MAX_CLIP_DURATION, resize to 9:16 (1080x1920)
         clips = []
         for cp in clip_paths:
             clip = VideoFileClip(str(cp))
-            # Resize to vertical format
+            # Trim long clips — keeps each segment short and punchy
+            if clip.duration > MAX_CLIP_DURATION:
+                clip = clip.subclip(0, MAX_CLIP_DURATION)
             clip = clip.resize(height=1920)
-            # Crop to 1080 width (center crop)
             if clip.w > 1080:
                 x1 = (clip.w - 1080) // 2
                 clip = clip.crop(x1=x1, width=1080)
@@ -106,45 +173,46 @@ def assemble_video(
 
         final_video = concatenate_videoclips(clips, method="compose")
 
-        # Add voice if available
+        # Trim to target_duration if clips overshoot
+        if final_video.duration > target_duration:
+            final_video = final_video.subclip(0, target_duration)
+
+        # Audio: voice track + background music
         audio_tracks = []
         if voice_path and voice_path.exists():
             voice = AudioFileClip(str(voice_path))
             voice = voice.volumex(1.0)
             audio_tracks.append(voice)
 
-        # Add background music at low volume
-        music_path = get_background_music()
+        music_path = get_background_music(variation)
         if music_path:
             music = AudioFileClip(str(music_path))
             music = music.subclip(0, min(music.duration, final_video.duration))
-            music = music.volumex(0.15)  # 15% volume — background only
+            music = music.volumex(MUSIC_VOLUME)
             audio_tracks.append(music)
 
         if audio_tracks:
             final_audio = CompositeAudioClip(audio_tracks)
             final_video = final_video.set_audio(final_audio)
 
-        # Export
-        console.print(f"  Exporting to: {output_path}")
-        console.print(f"  [yellow]Export may take 1-3 minutes...[/yellow]")
+        console.print(f"  Exporting → {output_path}")
+        console.print("  [yellow]Export takes 1-3 min — please wait...[/yellow]")
         final_video.write_videofile(
             str(output_path),
             fps=30,
             codec="libx264",
             audio_codec="aac",
-            temp_audiofile=str(paths["temp"] / "temp_audio.m4a"),
+            temp_audiofile=str(paths["temp"] / f"temp_audio_{variation}.m4a"),
             remove_temp=True,
             verbose=False,
             logger=None,
         )
 
-        # Cleanup
         for clip in clips:
             clip.close()
         final_video.close()
 
-        console.print(f"  [green]Video assembled: {output_path}[/green]")
+        console.print(f"  [green]Done → {output_path}[/green]")
         return output_path
 
     except Exception as e:

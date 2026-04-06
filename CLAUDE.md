@@ -6,7 +6,7 @@ Takes competitor videos, extracts clips, generates scripts, assembles final vide
 
 ## OS
 Windows 11 only — SSD is NTFS (Mac cannot write).
-Use Windows paths: D:\Product Reels\[keyword]\
+Use Windows paths: D:\Products Reels\[keyword]\
 
 ## Pipeline
 1. analyze  — scene detection (FFmpeg) + speech detection
@@ -21,7 +21,7 @@ Use Windows paths: D:\Product Reels\[keyword]\
 - NEVER use "buy", "purchase", "shop", "order" in scripts
 - Demucs takes 2-5 min per video on CPU — this is expected, do not kill the process
 - Always run system_check before Demucs and Whisper
-- SSD path: D:\Product Reels\ (verify drive letter in .env)
+- SSD path: D:\Products Reels\ (verify drive letter in .env)
 - music/ folder: drop royalty-free MP3s here before assembly
 
 ## Commands
@@ -37,8 +37,8 @@ python main.py --keyword "wireless earbuds" --product "Smart TWS Earbuds" --skip
 ```
 
 ## Input/Output
-Input:  D:\Product Reels\[keyword]\raw\*.mp4
-Output: D:\Product Reels\[keyword]\output\[datetime]\final.mp4
+Input:  D:\Products Reels\[keyword]\raw\*.mp4
+Output: D:\Products Reels\[keyword]\output\[datetime]\final.mp4
                                                        post_metadata.json
 
 ## Missing / future

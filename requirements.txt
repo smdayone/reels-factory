@@ -3,19 +3,24 @@ moviepy==1.0.3
 ffmpeg-python==0.2.0
 
 # Audio separation
-demucs==4.0.1
+demucs
 
-# Transcription
-openai-whisper==20231117
-torch==2.3.0
-torchaudio==2.3.0
+# Transcription — faster-whisper: no torch dependency, works on Python 3.14
+faster-whisper
 
 # AI APIs
-anthropic==0.28.0
+anthropic>=0.28.0
+httpx>=0.27.0
 
 # Utilities
-python-dotenv==1.0.1
-rich==13.7.1
-psutil==5.9.8
-Pillow==10.3.0
-numpy==1.26.4
+python-dotenv>=1.0.1
+rich>=13.7.1
+psutil>=5.9.8
+Pillow>=10.3.0
+numpy>=1.26.4
+setuptools
+
+# Google Drive integration (music source)
+google-api-python-client>=2.100.0
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.1.1
