@@ -391,21 +391,12 @@ def mode_generate(keyword: str, args) -> None:
             console.print("  [red]Not enough clips for this variation — skipping[/red]")
             continue
 
-        # Voice-over: pick a vocals.wav extracted by Demucs during extract phase
-        paths = get_keyword_paths(keyword)
-        vocals_files = sorted(paths["voice"].rglob("vocals.wav"))
-        voice_path: Path | None = None
-        if vocals_files:
-            voice_path = vocals_files[i % len(vocals_files)]
-            console.print(f"  Voice-over: [cyan]{voice_path.parent.name}[/cyan]")
-        else:
-            console.print("  [dim]No vocals found — run extract without --skip-voice to enable voice-over[/dim]")
-
         output_path = assemble_video(
             keyword, clip_paths,
-            voice_path=voice_path,
+            voice_path=None,
             variation=i,
             target_duration=target_dur,
+            script=script,
         )
 
         if output_path:

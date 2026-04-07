@@ -7,6 +7,7 @@ import PIL.Image
 if not hasattr(PIL.Image, "ANTIALIAS"):
     PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
 
+import random as _random
 from pathlib import Path
 from datetime import datetime
 from moviepy.editor import (
@@ -17,6 +18,7 @@ from config.settings import (
     TARGET_DURATION, MIN_CLIP_DURATION, MAX_CLIP_DURATION, MUSIC_VOLUME,
     get_keyword_paths, MUSIC_DIR, MUSIC_SOURCE
 )
+from src.assembler.overlay_builder import add_hook_overlay, add_benefit_overlay, add_cta_overlay
 from src.utils.system_check import check_ram
 from rich.console import Console
 
@@ -55,9 +57,16 @@ def select_clips(
     """
     inventory = get_clips_inventory(keyword)
 
-    # Build a flat ordered pool: all categories in sequence, each rotated
+    # Build a seeded-random assembly order so each video starts differently
+    rng = _random.Random(variation)
+    start_cat = rng.choice(["hook", "problem", "solution"])
+    middle = [c for c in ["hook", "problem", "solution", "demo", "unboxing"] if c != start_cat]
+    rng.shuffle(middle)
+    varied_order = [start_cat] + middle + ["cta", "unclassified"]
+
+    # Build a flat ordered pool from the varied order, each category rotated
     pool: list[Path] = []
-    for category in ASSEMBLY_ORDER:
+    for category in varied_order:
         clips = inventory.get(category, [])
         if not clips:
             continue
@@ -121,11 +130,8 @@ def get_background_music(variation: int = 0) -> Path | None:
         console.print(f"  [yellow]No music files found in {MUSIC_DIR}[/yellow]")
         return None
 
-    chosen = music_files[variation % len(music_files)]
-    console.print(
-        f"  Music: [cyan]{chosen.parent.name}/{chosen.name}[/cyan] "
-        f"({variation % len(music_files) + 1}/{len(music_files)})"
-    )
+    chosen = _random.Random(variation * 31).choice(music_files)
+    console.print(f"  Music: [cyan]{chosen.parent.name}/{chosen.name}[/cyan]")
     return chosen
 
 
@@ -135,12 +141,14 @@ def assemble_video(
     voice_path: Path | None = None,
     variation: int = 0,
     target_duration: float = TARGET_DURATION,
+    script: dict = {},
 ) -> Path | None:
     """
     Assemble final vertical video (1080x1920, 30fps).
     Returns path to output file, or None on failure.
-    variation:        used to pick a different music track per video.
+    variation:        picks music track and assembly order seed.
     target_duration:  hard cap — video is trimmed to this length if clips overshoot.
+    script:           if provided, adds text overlays per clip position.
     """
     if not check_ram("video assembly"):
         return None
@@ -158,17 +166,28 @@ def assemble_video(
     console.print(f"  Assembling {len(clip_paths)} clips...")
 
     try:
-        # Load, trim to MAX_CLIP_DURATION, resize to 9:16 (1080x1920)
+        # Load, trim, resize, add text overlay
+        benefit_keys = ["problem", "solution", "proof"]
+        n = len(clip_paths)
         clips = []
-        for cp in clip_paths:
+        for idx, cp in enumerate(clip_paths):
             clip = VideoFileClip(str(cp))
-            # Trim long clips — keeps each segment short and punchy
             if clip.duration > MAX_CLIP_DURATION:
                 clip = clip.subclip(0, MAX_CLIP_DURATION)
             clip = clip.resize(height=1920)
             if clip.w > 1080:
                 x1 = (clip.w - 1080) // 2
                 clip = clip.crop(x1=x1, width=1080)
+
+            if script:
+                if idx == 0:
+                    clip = add_hook_overlay(clip, script.get("hook", ""))
+                elif idx == n - 1:
+                    clip = add_cta_overlay(clip, script.get("cta", ""))
+                else:
+                    key = benefit_keys[(idx - 1) % len(benefit_keys)]
+                    clip = add_benefit_overlay(clip, script.get(key, ""))
+
             clips.append(clip)
 
         final_video = concatenate_videoclips(clips, method="compose")
