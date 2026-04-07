@@ -78,6 +78,14 @@ MUSIC_SOURCE          = os.getenv("MUSIC_SOURCE", "local")   # "local" or "drive
 DRIVE_MUSIC_FOLDER_ID = os.getenv("DRIVE_MUSIC_FOLDER_ID", "")
 MUSIC_CACHE_DIR       = Path(os.getenv("MUSIC_CACHE_DIR", str(BASE_DIR / "music_cache")))
 
+# Text overlay minimum screen time (seconds).
+# Texts shorter than this are extended to span subsequent clips.
+TEXT_MIN_DURATION = float(os.getenv("TEXT_MIN_DURATION", 3.0))
+
+# CTA defaults (overridden interactively in mode_generate)
+CTA_MODE         = os.getenv("CTA_MODE", "generic")   # "comment" | "generic"
+CTA_COMMENT_WORD = os.getenv("CTA_COMMENT_WORD", "INFO")
+
 # Clip category keywords for transcript-based classification
 CLIP_KEYWORDS = {
     "hook": [

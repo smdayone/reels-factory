@@ -11,14 +11,18 @@ import random as _random
 from pathlib import Path
 from datetime import datetime
 from moviepy.editor import (
-    VideoFileClip, AudioFileClip,
-    CompositeAudioClip, concatenate_videoclips
+    VideoFileClip, AudioFileClip, ImageClip,
+    CompositeVideoClip, CompositeAudioClip, concatenate_videoclips
 )
 from config.settings import (
     TARGET_DURATION, MIN_CLIP_DURATION, MAX_CLIP_DURATION, MUSIC_VOLUME,
-    get_keyword_paths, MUSIC_DIR, MUSIC_SOURCE
+    TEXT_MIN_DURATION, get_keyword_paths, MUSIC_DIR, MUSIC_SOURCE
 )
-from src.assembler.overlay_builder import add_hook_overlay, add_benefit_overlay, add_cta_overlay
+from src.assembler.overlay_builder import (
+    render_hook_rgba, render_benefit_rgba, render_cta_rgba,
+    add_hook_overlay, add_benefit_overlay, add_cta_overlay,  # legacy kept
+    FRAME_W, FRAME_H,
+)
 from src.utils.system_check import check_ram
 from rich.console import Console
 
@@ -110,7 +114,7 @@ def get_background_music(variation: int = 0) -> Path | None:
     Pick a music file, cycling through available tracks by variation index.
     Source is determined by MUSIC_SOURCE in .env:
       "drive" — fetches from Google Drive folder (with local cache)
-      "local" — reads from the music/ folder inside the project (default)
+      "local" — reads from MUSIC_DIR recursively (default)
     """
     if MUSIC_SOURCE == "drive":
         from src.utils.drive_music import get_drive_music
@@ -130,6 +134,7 @@ def get_background_music(variation: int = 0) -> Path | None:
         console.print(f"  [yellow]No music files found in {MUSIC_DIR}[/yellow]")
         return None
 
+    # Seed * 31 gives a different random sequence from the assembly-order RNG
     chosen = _random.Random(variation * 31).choice(music_files)
     console.print(f"  Music: [cyan]{chosen.parent.name}/{chosen.name}[/cyan]")
     return chosen
@@ -146,9 +151,12 @@ def assemble_video(
     """
     Assemble final vertical video (1080x1920, 30fps).
     Returns path to output file, or None on failure.
-    variation:        picks music track and assembly order seed.
+
+    variation:        picks music track and overlay-position seed.
     target_duration:  hard cap — video is trimmed to this length if clips overshoot.
-    script:           if provided, adds text overlays per clip position.
+    script:           if provided, adds text overlays with minimum TEXT_MIN_DURATION
+                      screen time. Benefit positions are varied per clip (safe mobile
+                      range 25%-55%) so text never overlaps captions/descriptions.
     """
     if not check_ram("video assembly"):
         return None
@@ -166,11 +174,11 @@ def assemble_video(
     console.print(f"  Assembling {len(clip_paths)} clips...")
 
     try:
-        # Load, trim, resize, add text overlay
-        benefit_keys = ["problem", "solution", "proof"]
-        n = len(clip_paths)
+        # ── Step A: load, trim, resize (no overlays yet) ──────────────────────
         clips = []
-        for idx, cp in enumerate(clip_paths):
+        clip_durations: list[float] = []
+
+        for cp in clip_paths:
             clip = VideoFileClip(str(cp))
             if clip.duration > MAX_CLIP_DURATION:
                 clip = clip.subclip(0, MAX_CLIP_DURATION)
@@ -178,25 +186,62 @@ def assemble_video(
             if clip.w > 1080:
                 x1 = (clip.w - 1080) // 2
                 clip = clip.crop(x1=x1, width=1080)
-
-            if script:
-                if idx == 0:
-                    clip = add_hook_overlay(clip, script.get("hook", ""))
-                elif idx == n - 1:
-                    clip = add_cta_overlay(clip, script.get("cta", ""))
-                else:
-                    key = benefit_keys[(idx - 1) % len(benefit_keys)]
-                    clip = add_benefit_overlay(clip, script.get(key, ""))
-
+            clip_durations.append(clip.duration)
             clips.append(clip)
 
+        # ── Step B: concatenate + trim to target ──────────────────────────────
         final_video = concatenate_videoclips(clips, method="compose")
-
-        # Trim to target_duration if clips overshoot
         if final_video.duration > target_duration:
             final_video = final_video.subclip(0, target_duration)
 
-        # Audio: voice track + background music
+        # ── Step C: add text overlays as timed ImageClip layers ───────────────
+        if script:
+            # Seeded RNG for benefit Y positions (different seed from assembly + music)
+            rng = _random.Random(variation + 7)
+            benefit_keys = ["problem", "solution", "proof"]
+            n = len(clips)
+            overlay_layers = [final_video]
+
+            # Compute cumulative start time for each clip
+            t = 0.0
+            for idx, (clip, dur) in enumerate(zip(clips, clip_durations)):
+                t_start = t
+                t += dur
+
+                # Respect the hard cap: skip clips that start after trim point
+                if t_start >= final_video.duration:
+                    break
+
+                # Text duration: at least TEXT_MIN_DURATION, capped by remaining video
+                text_dur = max(TEXT_MIN_DURATION, dur)
+                text_dur = min(text_dur, final_video.duration - t_start)
+                if text_dur <= 0:
+                    continue
+
+                # Pick the right RGBA canvas
+                rgba = None
+                if idx == 0:
+                    rgba = render_hook_rgba(script.get("hook", ""))
+                elif idx == n - 1:
+                    rgba = render_cta_rgba(script.get("cta", ""))
+                else:
+                    # Vary vertical position per benefit (safe mobile range)
+                    y_frac = rng.uniform(0.25, 0.55)
+                    key = benefit_keys[(idx - 1) % len(benefit_keys)]
+                    rgba = render_benefit_rgba(script.get(key, ""), y_frac)
+
+                if rgba is not None:
+                    layer = (
+                        ImageClip(rgba, ismask=False)
+                        .set_start(t_start)
+                        .set_duration(text_dur)
+                    )
+                    overlay_layers.append(layer)
+
+            if len(overlay_layers) > 1:
+                final_video = CompositeVideoClip(overlay_layers, size=(FRAME_W, FRAME_H))
+
+        # ── Step D: audio — voice track + background music ────────────────────
         audio_tracks = []
         if voice_path and voice_path.exists():
             voice = AudioFileClip(str(voice_path))
@@ -214,6 +259,7 @@ def assemble_video(
             final_audio = CompositeAudioClip(audio_tracks)
             final_video = final_video.set_audio(final_audio)
 
+        # ── Step E: export ─────────────────────────────────────────────────────
         console.print(f"  Exporting → {output_path}")
         console.print("  [yellow]Export takes 1-3 min — please wait...[/yellow]")
         final_video.write_videofile(

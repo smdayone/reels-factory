@@ -4,8 +4,17 @@ Uses Pillow — no ImageMagick required.
 
 Overlay types:
   hook     — white pill background, black bold text, TOP position (8% from top)
-  benefit  — white text with black stroke, no background, BOTTOM position (80%)
+  benefit  — white text with black stroke, no background, variable position (25-55%)
   cta      — black pill background, white bold text, CENTER-BOTTOM (72%)
+
+Public API (two levels):
+  render_hook_rgba(text)            -> np.ndarray | None   (RGBA canvas)
+  render_benefit_rgba(text, y_frac) -> np.ndarray | None
+  render_cta_rgba(text)             -> np.ndarray | None
+
+  add_hook_overlay(clip, text)      -> clip  (legacy wrappers, still usable)
+  add_benefit_overlay(clip, text, y_frac=Y_BENEFIT)
+  add_cta_overlay(clip, text)
 """
 import numpy as np
 from pathlib import Path
@@ -22,9 +31,9 @@ WRAP_WIDTH = 900          # max text width in px before wrapping
 FRAME_W    = 1080
 FRAME_H    = 1920
 
-Y_HOOK    = 0.08          # 8% from top
-Y_BENEFIT = 0.80          # 80% from top
-Y_CTA     = 0.72          # 72% from top
+Y_HOOK    = 0.08          # 8% from top  (fixed)
+Y_BENEFIT = 0.40          # 40% default — callers pass varied value
+Y_CTA     = 0.72          # 72% from top (fixed)
 
 PILL_PAD_X = 36
 PILL_PAD_Y = 20
@@ -139,60 +148,82 @@ def _apply(clip, rgba: np.ndarray):
     return CompositeVideoClip([clip, overlay], size=(FRAME_W, FRAME_H))
 
 
-# ── public API ────────────────────────────────────────────────────────────────
+# ── render_*_rgba — return only the RGBA array (no clip wrapping) ─────────────
 
-def add_hook_overlay(clip, hook_text: str):
-    """White pill, black text — first clip, top of frame."""
+def render_hook_rgba(hook_text: str) -> "np.ndarray | None":
+    """White pill, black text — top of frame (8%). Returns RGBA array or None."""
     if not hook_text:
-        return clip
+        return None
     try:
         font = _load_font()
         lines = _wrap_text(hook_text, font)
-        rgba = _render_pill(
+        return _render_pill(
             lines, font,
             text_color=(0, 0, 0, 255),
             bg_color=(255, 255, 255, ALPHA_HOOK),
             y_frac=Y_HOOK,
         )
-        return _apply(clip, rgba)
     except Exception as e:
-        console.print(f"  [yellow]Hook overlay failed: {e}[/yellow]")
-        return clip
+        console.print(f"  [yellow]Hook render failed: {e}[/yellow]")
+        return None
 
 
-def add_benefit_overlay(clip, benefit_text: str):
-    """White text + black stroke, no bg — middle clips, bottom of frame."""
+def render_benefit_rgba(benefit_text: str, y_frac: float = Y_BENEFIT) -> "np.ndarray | None":
+    """
+    White text + black stroke, no background.
+    y_frac: vertical position (0.0 = top, 1.0 = bottom).
+    Safe mobile range: 0.25 – 0.55 (avoids caption/description overlap in basso).
+    Returns RGBA array or None.
+    """
     if not benefit_text:
-        return clip
+        return None
     try:
         font = _load_font()
         lines = _wrap_text(benefit_text, font)
-        rgba = _render_stroke_text(
+        return _render_stroke_text(
             lines, font,
             text_color=(255, 255, 255, 255),
             stroke_color=(0, 0, 0, 255),
-            y_frac=Y_BENEFIT,
+            y_frac=y_frac,
         )
-        return _apply(clip, rgba)
     except Exception as e:
-        console.print(f"  [yellow]Benefit overlay failed: {e}[/yellow]")
-        return clip
+        console.print(f"  [yellow]Benefit render failed: {e}[/yellow]")
+        return None
 
 
-def add_cta_overlay(clip, cta_text: str):
-    """Black pill, white text — last clip, center-bottom."""
+def render_cta_rgba(cta_text: str) -> "np.ndarray | None":
+    """Black pill, white text — center-bottom (72%). Returns RGBA array or None."""
     if not cta_text:
-        return clip
+        return None
     try:
         font = _load_font()
         lines = _wrap_text(cta_text, font)
-        rgba = _render_pill(
+        return _render_pill(
             lines, font,
             text_color=(255, 255, 255, 255),
             bg_color=(0, 0, 0, ALPHA_CTA),
             y_frac=Y_CTA,
         )
-        return _apply(clip, rgba)
     except Exception as e:
-        console.print(f"  [yellow]CTA overlay failed: {e}[/yellow]")
-        return clip
+        console.print(f"  [yellow]CTA render failed: {e}[/yellow]")
+        return None
+
+
+# ── legacy clip-level wrappers (kept for compatibility) ───────────────────────
+
+def add_hook_overlay(clip, hook_text: str):
+    """White pill, black text — first clip, top of frame."""
+    rgba = render_hook_rgba(hook_text)
+    return _apply(clip, rgba) if rgba is not None else clip
+
+
+def add_benefit_overlay(clip, benefit_text: str, y_frac: float = Y_BENEFIT):
+    """White text + black stroke, no bg — middle clips, variable position."""
+    rgba = render_benefit_rgba(benefit_text, y_frac)
+    return _apply(clip, rgba) if rgba is not None else clip
+
+
+def add_cta_overlay(clip, cta_text: str):
+    """Black pill, white text — last clip, center-bottom."""
+    rgba = render_cta_rgba(cta_text)
+    return _apply(clip, rgba) if rgba is not None else clip

@@ -341,6 +341,36 @@ def mode_extract(keyword: str, args) -> list[str]:
 # Stage 2 — Generate
 # ---------------------------------------------------------------------------
 
+def _pick_cta() -> str:
+    """
+    Interactive CTA picker.
+    Returns the exact CTA text that will be burned into the video.
+    """
+    from rich.table import Table as _Table
+    tbl = _Table(show_header=False, box=None, padding=(0, 2))
+    tbl.add_column(style="cyan bold")
+    tbl.add_column()
+    tbl.add_row("1", "Comment trigger  [dim](es. \"Comment 'INFO' below 👇\")[/dim]")
+    tbl.add_row("2", "Generica         [dim](\"Link in bio 🔗\")[/dim]")
+    console.print()
+    console.print("[bold]Tipo di CTA:[/bold]")
+    console.print(tbl)
+
+    choice = Prompt.ask("Scelta", choices=["1", "2"], default="2")
+
+    if choice == "1":
+        word = Prompt.ask(
+            "  Parola trigger  [dim](es. INFO, FREE, LINK)[/dim]",
+            default="INFO",
+        ).upper().strip() or "INFO"
+        cta_text = f"Comment '{word}' below \U0001f447"
+    else:
+        cta_text = "Link in bio \U0001f517"
+
+    console.print(f"  CTA: [green]{cta_text}[/green]\n")
+    return cta_text
+
+
 def mode_generate(keyword: str, args) -> None:
     """Generate N final videos from existing clips."""
     total_clips = show_clips_summary(keyword)
@@ -356,6 +386,9 @@ def mode_generate(keyword: str, args) -> None:
         n_videos = IntPrompt.ask("How many videos to generate?", default=3)
 
     n_videos = max(1, min(n_videos, 20))  # clamp 1-20
+
+    # CTA — ask once, applied to every video in this batch
+    cta_override = _pick_cta()
 
     console.print(f"\n[bold]Generating {n_videos} video(s) for [cyan]{keyword}[/cyan]...[/bold]\n")
 
@@ -380,6 +413,9 @@ def mode_generate(keyword: str, args) -> None:
             if script:
                 console.print(f"  [green]Script generated[/green]")
                 console.print(f"  [bold]Hook:[/bold] {script.get('hook', '')}")
+
+        # Always override CTA with user's choice (ignores Claude's suggestion)
+        script["cta"] = cta_override
 
         # Random target duration between 15 and 45 seconds
         target_dur = random.randint(15, 45)
