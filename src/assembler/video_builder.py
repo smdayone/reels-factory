@@ -202,6 +202,10 @@ def assemble_video(
             n = len(clips)
             overlay_layers = [final_video]
 
+            # Sequential placement: a new text only starts after the previous one ends.
+            # This prevents any overlap when short clips (< TEXT_MIN_DURATION) are used.
+            last_text_end = 0.0
+
             # Compute cumulative start time for each clip
             t = 0.0
             for idx, (clip, dur) in enumerate(zip(clips, clip_durations)):
@@ -211,6 +215,10 @@ def assemble_video(
                 # Respect the hard cap: skip clips that start after trim point
                 if t_start >= final_video.duration:
                     break
+
+                # Skip this clip's text if the previous text is still on screen
+                if t_start < last_text_end:
+                    continue
 
                 # Text duration: at least TEXT_MIN_DURATION, capped by remaining video
                 text_dur = max(TEXT_MIN_DURATION, dur)
@@ -225,7 +233,7 @@ def assemble_video(
                 elif idx == n - 1:
                     rgba = render_cta_rgba(script.get("cta", ""))
                 else:
-                    # Vary vertical position per benefit (safe mobile range)
+                    # Vary vertical position per benefit (safe mobile range: 25%-55%)
                     y_frac = rng.uniform(0.25, 0.55)
                     key = benefit_keys[(idx - 1) % len(benefit_keys)]
                     rgba = render_benefit_rgba(script.get(key, ""), y_frac)
@@ -237,6 +245,7 @@ def assemble_video(
                         .set_duration(text_dur)
                     )
                     overlay_layers.append(layer)
+                    last_text_end = t_start + text_dur
 
             if len(overlay_layers) > 1:
                 final_video = CompositeVideoClip(overlay_layers, size=(FRAME_W, FRAME_H))

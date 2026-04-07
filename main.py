@@ -341,31 +341,62 @@ def mode_extract(keyword: str, args) -> list[str]:
 # Stage 2 — Generate
 # ---------------------------------------------------------------------------
 
+_GENERIC_CTAS = {
+    "1": ("Get yours \u2192 link in bio \u2b06\ufe0f",        "Get yours → link in bio ⬆️"),
+    "2": ("Tap the link in bio to get yours \U0001f446",      "Tap the link in bio to get yours 👆"),
+    "3": ("Don\u2019t miss out \u2014 link in bio \U0001f517", "Don't miss out — link in bio 🔗"),
+    "4": ("Follow for more + link in bio \U0001f4f2",         "Follow for more + link in bio 📲"),
+    "5": ("custom",                                            "(scrivi testo personalizzato)"),
+}
+
+
 def _pick_cta() -> str:
     """
     Interactive CTA picker.
     Returns the exact CTA text that will be burned into the video.
     """
     from rich.table import Table as _Table
-    tbl = _Table(show_header=False, box=None, padding=(0, 2))
-    tbl.add_column(style="cyan bold")
-    tbl.add_column()
-    tbl.add_row("1", "Comment trigger  [dim](es. \"Comment 'INFO' below 👇\")[/dim]")
-    tbl.add_row("2", "Generica         [dim](\"Link in bio 🔗\")[/dim]")
+
+    # ── Type selection ──────────────────────────────────────────────────────
+    type_tbl = _Table(show_header=False, box=None, padding=(0, 2))
+    type_tbl.add_column(style="cyan bold")
+    type_tbl.add_column()
+    type_tbl.add_row("1", "Comment trigger  [dim](ManyChat — 1 o più parole)[/dim]")
+    type_tbl.add_row("2", "Generica         [dim](link in bio o personalizzata)[/dim]")
     console.print()
     console.print("[bold]Tipo di CTA:[/bold]")
-    console.print(tbl)
+    console.print(type_tbl)
 
-    choice = Prompt.ask("Scelta", choices=["1", "2"], default="2")
+    cta_type = Prompt.ask("Scelta", choices=["1", "2"], default="2")
 
-    if choice == "1":
-        word = Prompt.ask(
-            "  Parola trigger  [dim](es. INFO, FREE, LINK)[/dim]",
+    # ── Comment trigger ─────────────────────────────────────────────────────
+    if cta_type == "1":
+        trigger = Prompt.ask(
+            "  Trigger  [dim](es. INFO · FREE · FREE GUIDE · LINK NOW)[/dim]",
             default="INFO",
         ).upper().strip() or "INFO"
-        cta_text = f"Comment '{word}' below \U0001f447"
+        cta_text = f"Comment \u2018{trigger}\u2019 below \U0001f447"
+
+    # ── Generic ─────────────────────────────────────────────────────────────
     else:
-        cta_text = "Link in bio \U0001f517"
+        gen_tbl = _Table(show_header=False, box=None, padding=(0, 2))
+        gen_tbl.add_column(style="cyan bold")
+        gen_tbl.add_column()
+        for k, (_, label) in _GENERIC_CTAS.items():
+            gen_tbl.add_row(k, label)
+        console.print()
+        console.print("[bold]  Testo CTA:[/bold]")
+        console.print(gen_tbl)
+
+        gen_choice = Prompt.ask(
+            "  Scelta", choices=list(_GENERIC_CTAS.keys()), default="1"
+        )
+        if gen_choice == "5":
+            cta_text = Prompt.ask("  Testo personalizzato").strip()
+            if not cta_text:
+                cta_text = _GENERIC_CTAS["1"][0]
+        else:
+            cta_text = _GENERIC_CTAS[gen_choice][0]
 
     console.print(f"  CTA: [green]{cta_text}[/green]\n")
     return cta_text

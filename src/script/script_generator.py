@@ -19,28 +19,31 @@ Target duration: {duration} seconds
 Buyer persona: {persona}
 Key problem identified from video analysis: {problem_summary}
 
-Write a video script that follows this structure:
-1. HOOK (3-5s): A relatable statement about the problem — NO product mention yet
-2. PROBLEM (5-8s): Deepen the pain point — make the viewer say "that's me"
-3. SOLUTION (8-15s): Introduce the product as the natural answer — show, don't sell
-4. PROOF (5-8s): One specific benefit or result — concrete, believable
-5. CTA (3-5s): Soft call to action — "comment X if you want to know more" or "save this"
+Write OVERLAY TEXT for each section. These words appear burned into the video frame —
+they are NOT spoken aloud. Think bold, punchy captions — not sentences.
 
-STRICT RULES:
-- Never mention price
-- Never say "buy", "purchase", "shop", "order", "affordable", "cheap"
-- Never use superlatives like "best", "amazing", "incredible" without evidence
-- Write in natural spoken English — how a real person talks, not an ad
-- The hook must be a problem statement, not a product statement
-- Maximum {duration} seconds when spoken at normal pace (~2.5 words/second)
+Structure:
+1. HOOK: relatable problem, NO product name — max 7 words
+2. PROBLEM: deepen the pain — max 8 words
+3. SOLUTION: introduce the product naturally — max 8 words
+4. PROOF: one concrete benefit or result — max 8 words
+5. CTA: (will be overridden externally — write a placeholder)
 
-Output format:
-HOOK: [script text]
-PROBLEM: [script text]
-SOLUTION: [script text]
-PROOF: [script text]
-CTA: [script text]
-PERSONA_NOTE: [one line explaining why this script resonates with this persona]"""
+OVERLAY RULES:
+- Each section = 1 short line, max 8 words
+- NO punctuation except "—" for pauses
+- NO emoji
+- Sentence case (first word capitalised only)
+- Never mention price, never say buy/purchase/shop/order
+- No superlatives without evidence
+
+Output format (one line per section, nothing else):
+HOOK: [text]
+PROBLEM: [text]
+SOLUTION: [text]
+PROOF: [text]
+CTA: [text]
+PERSONA_NOTE: [one line explaining why this resonates with the persona]"""
 
 
 def generate_script(
