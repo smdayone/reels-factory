@@ -341,65 +341,47 @@ def mode_extract(keyword: str, args) -> list[str]:
 # Stage 2 — Generate
 # ---------------------------------------------------------------------------
 
-_GENERIC_CTAS = {
-    "1": ("Get yours \u2192 link in bio \u2b06\ufe0f",        "Get yours → link in bio ⬆️"),
-    "2": ("Tap the link in bio to get yours \U0001f446",      "Tap the link in bio to get yours 👆"),
-    "3": ("Don\u2019t miss out \u2014 link in bio \U0001f517", "Don't miss out — link in bio 🔗"),
-    "4": ("Follow for more + link in bio \U0001f4f2",         "Follow for more + link in bio 📲"),
-    "5": ("custom",                                            "(scrivi testo personalizzato)"),
-}
+# Pool of generic CTAs — one is picked at random per video
+_GENERIC_CTAS = [
+    "Get yours \u2192 link in bio \u2b06\ufe0f",
+    "Tap the link in bio to get yours \U0001f446",
+    "Don\u2019t miss out \u2014 link in bio \U0001f517",
+    "Follow for more + link in bio \U0001f4f2",
+]
 
 
-def _pick_cta() -> str:
+def _pick_cta() -> "str | None":
     """
     Interactive CTA picker.
-    Returns the exact CTA text that will be burned into the video.
+    Returns:
+      str  — fixed CTA text used for every video (comment trigger)
+      None — generic mode: a random CTA from _GENERIC_CTAS is picked per video
     """
     from rich.table import Table as _Table
 
-    # ── Type selection ──────────────────────────────────────────────────────
     type_tbl = _Table(show_header=False, box=None, padding=(0, 2))
     type_tbl.add_column(style="cyan bold")
     type_tbl.add_column()
-    type_tbl.add_row("1", "Comment trigger  [dim](ManyChat — 1 o più parole)[/dim]")
-    type_tbl.add_row("2", "Generica         [dim](link in bio o personalizzata)[/dim]")
+    type_tbl.add_row("1", "Comment trigger  [dim](ManyChat \u2014 1 o pi\u00f9 parole)[/dim]")
+    type_tbl.add_row("2", "Generica         [dim](randomizzata per ogni video)[/dim]")
     console.print()
     console.print("[bold]Tipo di CTA:[/bold]")
     console.print(type_tbl)
 
     cta_type = Prompt.ask("Scelta", choices=["1", "2"], default="2")
 
-    # ── Comment trigger ─────────────────────────────────────────────────────
     if cta_type == "1":
         trigger = Prompt.ask(
-            "  Trigger  [dim](es. INFO · FREE · FREE GUIDE · LINK NOW)[/dim]",
+            "  Trigger  [dim](es. INFO \u00b7 FREE \u00b7 FREE GUIDE \u00b7 LINK NOW)[/dim]",
             default="INFO",
         ).upper().strip() or "INFO"
         cta_text = f"Comment \u2018{trigger}\u2019 below \U0001f447"
+        console.print(f"  CTA: [green]{cta_text}[/green]\n")
+        return cta_text
 
-    # ── Generic ─────────────────────────────────────────────────────────────
-    else:
-        gen_tbl = _Table(show_header=False, box=None, padding=(0, 2))
-        gen_tbl.add_column(style="cyan bold")
-        gen_tbl.add_column()
-        for k, (_, label) in _GENERIC_CTAS.items():
-            gen_tbl.add_row(k, label)
-        console.print()
-        console.print("[bold]  Testo CTA:[/bold]")
-        console.print(gen_tbl)
-
-        gen_choice = Prompt.ask(
-            "  Scelta", choices=list(_GENERIC_CTAS.keys()), default="1"
-        )
-        if gen_choice == "5":
-            cta_text = Prompt.ask("  Testo personalizzato").strip()
-            if not cta_text:
-                cta_text = _GENERIC_CTAS["1"][0]
-        else:
-            cta_text = _GENERIC_CTAS[gen_choice][0]
-
-    console.print(f"  CTA: [green]{cta_text}[/green]\n")
-    return cta_text
+    # Generic — signal the loop to randomize per video
+    console.print("  CTA: [dim]randomizzata per ogni video[/dim]\n")
+    return None
 
 
 def mode_generate(keyword: str, args) -> None:
@@ -445,8 +427,8 @@ def mode_generate(keyword: str, args) -> None:
                 console.print(f"  [green]Script generated[/green]")
                 console.print(f"  [bold]Hook:[/bold] {script.get('hook', '')}")
 
-        # Always override CTA with user's choice (ignores Claude's suggestion)
-        script["cta"] = cta_override
+        # Override CTA: fixed string (comment trigger) or random generic per video
+        script["cta"] = cta_override if cta_override is not None else random.choice(_GENERIC_CTAS)
 
         # Random target duration between 15 and 45 seconds
         target_dur = random.randint(15, 45)
