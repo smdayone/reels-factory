@@ -28,8 +28,9 @@ Structure:
 3. SOLUTION: introduce the product naturally — max 8 words
 4. PROOF: one concrete benefit or result — max 8 words
 5. CTA: (will be overridden externally — write a placeholder)
+6. CAPTION: TikTok/IG post caption — see rules below
 
-OVERLAY RULES:
+OVERLAY RULES (sections 1-5):
 - Each section = 1 short line, max 8 words
 - NO punctuation except "—" for pauses
 - NO emoji
@@ -37,12 +38,21 @@ OVERLAY RULES:
 - Never mention price, never say buy/purchase/shop/order
 - No superlatives without evidence
 
+CAPTION RULES (section 6):
+- 1-3 lines of engaging copy — DIFFERENT tone every video (rotate: storytelling /
+  rhetorical question / bold statement / relatable confession / list of 3)
+- Do NOT repeat the hook verbatim
+- End with 5-8 relevant hashtags on a new line (mix niche + broad)
+- Emoji allowed, keep it natural
+- Never mention price
+
 Output format (one line per section, nothing else):
 HOOK: [text]
 PROBLEM: [text]
 SOLUTION: [text]
 PROOF: [text]
 CTA: [text]
+CAPTION: [text]
 PERSONA_NOTE: [one line explaining why this resonates with the persona]"""
 
 
@@ -75,7 +85,7 @@ def generate_script(
             },
             json={
                 "model": CLAUDE_MODEL,
-                "max_tokens": 600,
+                "max_tokens": 800,
                 "messages": [{"role": "user", "content": prompt}]
             },
             timeout=30,
@@ -84,7 +94,7 @@ def generate_script(
 
         # Parse sections
         sections = {}
-        for section in ["HOOK", "PROBLEM", "SOLUTION", "PROOF", "CTA", "PERSONA_NOTE"]:
+        for section in ["HOOK", "PROBLEM", "SOLUTION", "PROOF", "CTA", "CAPTION", "PERSONA_NOTE"]:
             match = re.search(rf"{section}:\s*(.+?)(?=\n[A-Z_]+:|$)", raw, re.DOTALL)
             if match:
                 sections[section.lower()] = match.group(1).strip()

@@ -7,6 +7,9 @@ Overlay types:
   benefit  — white text with black stroke, no background, variable position (25-55%)
   cta      — black pill background, white bold text, CENTER-BOTTOM (72%)
 
+Font: Bahnschrift (modern geometric, Windows 10+) → Segoe UI Bold → Arial Bold → PIL default
+Letter spacing: LETTER_SPACING pixels between characters (negative = tighter)
+
 Public API (two levels):
   render_hook_rgba(text)            -> np.ndarray | None   (RGBA canvas)
   render_benefit_rgba(text, y_frac) -> np.ndarray | None
@@ -25,43 +28,69 @@ from rich.console import Console
 console = Console()
 
 # ── layout constants ─────────────────────────────────────────────────────────
-FONT_PATH  = Path(r"C:\Windows\Fonts\arialbd.ttf")
-FONT_SIZE  = 52
-WRAP_WIDTH = 900          # max text width in px before wrapping
-FRAME_W    = 1080
-FRAME_H    = 1920
+_FONT_CANDIDATES = [
+    Path(r"C:\Windows\Fonts\bahnschrift.ttf"),   # Bahnschrift — modern, geometric
+    Path(r"C:\Windows\Fonts\segoeuib.ttf"),       # Segoe UI Bold
+    Path(r"C:\Windows\Fonts\arialbd.ttf"),        # Arial Bold
+]
 
-Y_HOOK    = 0.08          # 8% from top  (fixed)
-Y_BENEFIT = 0.40          # 40% default — callers pass varied value
-Y_CTA     = 0.72          # 72% from top (fixed)
+FONT_SIZE      = 52
+WRAP_WIDTH     = 900
+FRAME_W        = 1080
+FRAME_H        = 1920
+LETTER_SPACING = -1          # pixels — negative tightens tracking
 
-PILL_PAD_X = 36
-PILL_PAD_Y = 20
+Y_HOOK    = 0.08
+Y_BENEFIT = 0.40
+Y_CTA     = 0.72
+
+PILL_PAD_X  = 36
+PILL_PAD_Y  = 20
 PILL_RADIUS = 30
 STROKE_W    = 3
 
-ALPHA_HOOK = 230          # ~90% opacity
-ALPHA_CTA  = 210          # ~82% opacity
+ALPHA_HOOK = 230
+ALPHA_CTA  = 210
+
+# Reusable dummy draw for text measurement (no allocation per call)
+_DUMMY_DRAW = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def _load_font(size: int = FONT_SIZE) -> ImageFont.FreeTypeFont:
-    try:
-        return ImageFont.truetype(str(FONT_PATH), size)
-    except OSError:
-        console.print("  [yellow]Arial Bold not found — using PIL default font[/yellow]")
-        return ImageFont.load_default()
+    for path in _FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(str(path), size)
+        except OSError:
+            continue
+    console.print("  [yellow]No preferred font found — using PIL default[/yellow]")
+    return ImageFont.load_default()
+
+
+# ── typography helpers ────────────────────────────────────────────────────────
+
+def _char_advance(ch: str, font) -> int:
+    """Advance width of a single character (pixels)."""
+    return int(_DUMMY_DRAW.textlength(ch, font=font))
+
+
+def _text_width(text: str, font) -> int:
+    """Total rendered width of text with LETTER_SPACING applied."""
+    if not text:
+        return 0
+    w = sum(_char_advance(ch, font) for ch in text)
+    w += LETTER_SPACING * (len(text) - 1)
+    return w
 
 
 def _wrap_text(text: str, font, max_width: int = WRAP_WIDTH) -> list[str]:
-    """Split text into lines that fit within max_width pixels."""
-    dummy = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    """Split text into lines that fit within max_width pixels (respects LETTER_SPACING)."""
     words = text.split()
     lines: list[str] = []
     current = ""
     for word in words:
         test = f"{current} {word}".strip()
-        if dummy.textlength(test, font=font) <= max_width:
+        if _text_width(test, font) <= max_width:
             current = test
         else:
             if current:
@@ -74,8 +103,32 @@ def _wrap_text(text: str, font, max_width: int = WRAP_WIDTH) -> list[str]:
 
 def _line_height(font) -> int:
     bbox = font.getbbox("Ag")
-    return bbox[3] - bbox[1] + 8   # +8 line gap
+    return bbox[3] - bbox[1] + 8
 
+
+def _draw_line(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    text: str,
+    font,
+    fill: tuple,
+    stroke_width: int = 0,
+    stroke_fill: tuple | None = None,
+) -> None:
+    """Draw text character by character applying LETTER_SPACING."""
+    for ch in text:
+        draw.text(
+            (x, y), ch,
+            font=font,
+            fill=fill,
+            stroke_width=stroke_width,
+            stroke_fill=stroke_fill,
+        )
+        x += _char_advance(ch, font) + LETTER_SPACING
+
+
+# ── renderers ─────────────────────────────────────────────────────────────────
 
 def _render_pill(
     lines: list[str],
@@ -89,9 +142,9 @@ def _render_pill(
     draw = ImageDraw.Draw(canvas)
 
     lh = _line_height(font)
-    total_text_h = len(lines) * lh - 8  # remove trailing gap
+    total_text_h = len(lines) * lh - 8
 
-    max_line_w = max(int(draw.textlength(l, font=font)) for l in lines)
+    max_line_w = max(_text_width(l, font) for l in lines)
     pill_w = min(max_line_w + PILL_PAD_X * 2, FRAME_W - 40)
     pill_h = total_text_h + PILL_PAD_Y * 2
 
@@ -106,8 +159,9 @@ def _render_pill(
 
     ty = y0 + PILL_PAD_Y
     for line in lines:
-        lw = int(draw.textlength(line, font=font))
-        draw.text(((FRAME_W - lw) // 2, ty), line, font=font, fill=text_color)
+        lw = _text_width(line, font)
+        tx = (FRAME_W - lw) // 2
+        _draw_line(draw, tx, ty, line, font, fill=text_color)
         ty += lh
 
     return np.array(canvas)
@@ -129,14 +183,12 @@ def _render_stroke_text(
     ty = int(y_frac * FRAME_H) - total_h // 2
 
     for line in lines:
-        lw = int(draw.textlength(line, font=font))
-        draw.text(
-            ((FRAME_W - lw) // 2, ty), line,
-            font=font,
-            fill=text_color,
-            stroke_width=STROKE_W,
-            stroke_fill=stroke_color,
-        )
+        lw = _text_width(line, font)
+        tx = (FRAME_W - lw) // 2
+        _draw_line(draw, tx, ty, line, font,
+                   fill=text_color,
+                   stroke_width=STROKE_W,
+                   stroke_fill=stroke_color)
         ty += lh
 
     return np.array(canvas)
@@ -172,7 +224,7 @@ def render_benefit_rgba(benefit_text: str, y_frac: float = Y_BENEFIT) -> "np.nda
     """
     White text + black stroke, no background.
     y_frac: vertical position (0.0 = top, 1.0 = bottom).
-    Safe mobile range: 0.25 – 0.55 (avoids caption/description overlap in basso).
+    Safe mobile range: 0.25 – 0.55 (avoids caption/description overlap).
     Returns RGBA array or None.
     """
     if not benefit_text:

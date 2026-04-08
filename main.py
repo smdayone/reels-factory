@@ -475,7 +475,7 @@ def mode_generate(keyword: str, args) -> None:
                 "script":         script,
                 "clips_used":     [str(p) for p in clip_paths],
                 "output":         str(output_path),
-                "post_caption":   (script.get("hook", "") + " " + script.get("cta", "")).strip(),
+                "post_caption":   script.get("caption", ""),
             }
             meta_path = output_path.parent / "post_metadata.json"
             meta_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
