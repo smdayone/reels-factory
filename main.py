@@ -19,6 +19,7 @@ import argparse
 import json
 import random
 import subprocess
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -208,6 +209,22 @@ def _cut_clip(
     subprocess.run(cmd, check=False)
 
 
+def load_er_references(keyword: str, top_n: int = 3) -> list[dict]:
+    """
+    Load high-ER caption references from captions_reference.json.
+    File format: [{"caption": "...", "er": 4.8}, ...]
+    Returns the top_n entries sorted by ER descending, or [] if file missing.
+    """
+    ref_file = get_keyword_paths(keyword)["base"] / "captions_reference.json"
+    if not ref_file.exists():
+        return []
+    try:
+        refs = json.loads(ref_file.read_text(encoding="utf-8"))
+        return sorted(refs, key=lambda x: x.get("er", 0), reverse=True)[:top_n]
+    except Exception:
+        return []
+
+
 def process_video(
     video_path: Path,
     keyword: str,
@@ -216,6 +233,7 @@ def process_video(
     all_transcripts: list,
 ) -> None:
     """Run the full extract pipeline on a single raw video."""
+    _t0 = time.time()
     console.print(f"\n[bold blue]Processing:[/bold blue] {video_path.name}")
     paths = get_keyword_paths(keyword)
 
@@ -292,9 +310,11 @@ def process_video(
 
         kept += 1
 
+    elapsed = time.time() - _t0
     console.print(
         f"  [green]Done:[/green] {kept} clips kept  |  "
-        f"{discarded_short} too short  |  {discarded_text} discarded (text overlay)"
+        f"{discarded_short} too short  |  {discarded_text} discarded (text overlay)  |  "
+        f"[dim]{elapsed:.1f}s[/dim]"
     )
 
 
@@ -316,20 +336,70 @@ def mode_extract(keyword: str, args) -> list[str]:
 
     console.print(f"\n[bold]Found {len(raw_videos)} video(s) to process[/bold]")
 
+    # ── Voice separation — opt-in, default OFF (Demucs: 2-5 min/video on CPU) ──
+    if args.skip_voice:
+        run_voice_sep = False
+    else:
+        run_voice_sep = Prompt.ask(
+            "Separate voice from clips?  [dim](Demucs \u2014 removes competitor voice, keeps ambient sounds \u2014 2-5 min/video)[/dim]",
+            choices=["y", "n"],
+            default="n",
+        ) == "y"
+
+    # ── Subtitle check ────────────────────────────────────────────────────────
     skip_subtitle = args.skip_subtitle_check
     if not ANTHROPIC_API_KEY and not skip_subtitle:
         console.print("[yellow]No ANTHROPIC_API_KEY — subtitle check disabled[/yellow]")
         skip_subtitle = True
 
+    # ── Checkpoint / resume ───────────────────────────────────────────────────
+    progress_file = paths["base"] / ".extract_progress.json"
+    skip_names: set[str] = set()
+
+    if progress_file.exists():
+        try:
+            prev = json.loads(progress_file.read_text(encoding="utf-8"))
+            done_count = len(prev.get("processed", []))
+            resume = Prompt.ask(
+                f"  Previous run found — {done_count}/{prev.get('total', '?')} video(s) done. Resume?",
+                choices=["y", "n"],
+                default="y",
+            ) == "y"
+            if resume:
+                skip_names = set(prev.get("processed", []))
+            else:
+                progress_file.unlink(missing_ok=True)
+        except Exception:
+            progress_file.unlink(missing_ok=True)
+
+    progress = {
+        "started_at": datetime.now().strftime("%Y%m%d_%H%M%S"),
+        "total": len(raw_videos),
+        "processed": list(skip_names),
+    }
+    progress_file.write_text(json.dumps(progress, indent=2), encoding="utf-8")
+
+    # ── Main loop ─────────────────────────────────────────────────────────────
     all_transcripts: list[str] = []
     for video_path in raw_videos:
+        if video_path.name in skip_names:
+            console.print(f"\n[dim]Skipping (already done): {video_path.name}[/dim]")
+            continue
+
         process_video(
             video_path,
             keyword,
-            skip_voice=args.skip_voice,
+            skip_voice=not run_voice_sep,
             skip_subtitle_check=skip_subtitle,
             all_transcripts=all_transcripts,
         )
+
+        # Save progress after each successful video
+        progress["processed"].append(video_path.name)
+        progress_file.write_text(json.dumps(progress, indent=2), encoding="utf-8")
+
+    # Clean up progress file — session complete
+    progress_file.unlink(missing_ok=True)
 
     console.print()
     show_clips_summary(keyword)
@@ -406,6 +476,10 @@ def mode_generate(keyword: str, args) -> None:
     console.print(f"\n[bold]Generating {n_videos} video(s) for [cyan]{keyword}[/cyan]...[/bold]\n")
 
     transcripts = load_existing_transcripts(keyword)
+    er_refs = load_er_references(keyword)
+    if er_refs:
+        console.print(f"  [dim]Using {len(er_refs)} high-ER caption reference(s) as inspiration[/dim]\n")
+
     generated: list[Path] = []
 
     for i in range(n_videos):
@@ -422,6 +496,7 @@ def mode_generate(keyword: str, args) -> None:
             script = generate_script(
                 keyword, "product",
                 persona, persona.get("main_pain", ""),
+                er_references=er_refs,
             )
             if script:
                 console.print(f"  [green]Script generated[/green]")

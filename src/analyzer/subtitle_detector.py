@@ -9,7 +9,9 @@ Clips without a clean frame check are kept (fail-open to avoid losing content).
 
 Cost: ~$0.002-0.004 per clip (3 small JPEG frames via claude-haiku).
 """
+import contextlib
 import json
+import os
 import subprocess
 import tempfile
 import base64
@@ -43,22 +45,29 @@ def _get_duration(video_path: Path) -> float | None:
 
 def _extract_frame(video_path: Path, timestamp: float) -> bytes | None:
     """Extract one JPEG frame at timestamp, return raw bytes."""
-    tmp = Path(tempfile.mktemp(suffix=".jpg"))
-    subprocess.run([
-        "ffmpeg", "-y",
-        "-ss", str(timestamp),
-        "-i", str(video_path),
-        "-frames:v", "1",
-        "-q:v", "4",          # quality 4 = small file, good enough for text detection
-        "-vf", "scale=480:-2", # downscale to save API tokens
-        "-loglevel", "error",
-        str(tmp),
-    ], capture_output=True)
-    if tmp.exists():
-        data = tmp.read_bytes()
-        tmp.unlink(missing_ok=True)
-        return data
-    return None
+    # mkstemp creates the file and returns an open fd — close it immediately
+    # so FFmpeg can write to the path without Windows locking conflicts.
+    fd, tmp_path = tempfile.mkstemp(suffix=".jpg")
+    os.close(fd)
+    tmp = Path(tmp_path)
+    try:
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-ss", str(timestamp),
+            "-i", str(video_path),
+            "-frames:v", "1",
+            "-q:v", "4",           # quality 4 = small file, good enough for text detection
+            "-vf", "scale=480:-2", # downscale to save API tokens
+            "-loglevel", "error",
+            str(tmp),
+        ], capture_output=True)
+        if tmp.exists():
+            return tmp.read_bytes()
+        return None
+    finally:
+        # Suppress PermissionError: Windows may briefly hold the handle after read
+        with contextlib.suppress(PermissionError, FileNotFoundError):
+            tmp.unlink()
 
 
 def has_hardcoded_text(clip_path: Path) -> bool:

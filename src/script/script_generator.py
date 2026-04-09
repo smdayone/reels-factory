@@ -61,8 +61,13 @@ def generate_script(
     category: str,
     persona: dict,
     problem_summary: str,
+    er_references: list[dict] | None = None,
 ) -> dict:
-    """Generate full video script. Returns dict with sections."""
+    """Generate full video script. Returns dict with sections.
+
+    er_references: list of {"caption": str, "er": float} dicts sorted by ER desc.
+    Top entries are appended to the prompt as style inspiration for the CAPTION section.
+    """
     if not ANTHROPIC_API_KEY:
         console.print("  [yellow]No API key — skipping script generation[/yellow]")
         return {}
@@ -74,6 +79,11 @@ def generate_script(
         persona=f"{persona['name']} ({persona['age_range']}) — {persona['main_pain']}",
         problem_summary=problem_summary,
     )
+
+    if er_references:
+        prompt += "\n\nHIGH-PERFORMING CAPTIONS (use as style/tone inspiration for CAPTION only — do not copy verbatim):\n"
+        for ref in er_references:
+            prompt += f"- ER {ref.get('er', '?')}%: {ref.get('caption', '').strip()}\n"
 
     try:
         response = httpx.post(
