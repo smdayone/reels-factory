@@ -29,17 +29,17 @@ console = Console()
 
 # ── layout constants ─────────────────────────────────────────────────────────
 _FONT_CANDIDATES = [
-    Path(r"C:\Windows\Fonts\bahnschrift.ttf"),   # Bahnschrift — modern, geometric
-    Path(r"C:\Windows\Fonts\segoeuib.ttf"),       # Segoe UI Bold
-    Path(r"C:\Windows\Fonts\arialbd.ttf"),        # Arial Bold
+    Path(r"C:\Windows\Fonts\segoeuib.ttf"),       # Segoe UI Bold — true bold weight, primary
+    Path(r"C:\Windows\Fonts\bahnschrift.ttf"),     # Bahnschrift — modern geometric, fallback
+    Path(r"C:\Windows\Fonts\arialbd.ttf"),         # Arial Bold
 ]
 
-FONT_SIZE         = 52
-FONT_SIZE_EMOTION = 64   # larger font for full-screen emotion text
+FONT_SIZE         = 46             # reduced for cleaner look on mobile (was 52)
+FONT_SIZE_EMOTION = 58             # full-screen emotion text (was 64)
 WRAP_WIDTH     = 900
 FRAME_W        = 1080
 FRAME_H        = 1920
-LETTER_SPACING = -1          # pixels — negative tightens tracking
+LETTER_SPACING = -2                # tighter tracking (was -1)
 
 Y_HOOK    = 0.08
 Y_BENEFIT = 0.40
@@ -48,7 +48,7 @@ Y_CTA     = 0.72
 PILL_PAD_X  = 36
 PILL_PAD_Y  = 20
 PILL_RADIUS = 30
-STROKE_W    = 3
+STROKE_W    = 4
 
 ALPHA_HOOK = 230
 ALPHA_CTA  = 210

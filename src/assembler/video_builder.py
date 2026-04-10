@@ -131,34 +131,71 @@ def select_clips(
     return selected
 
 
-def get_background_music(variation: int = 0) -> Path | None:
+def get_background_music(
+    variation: int = 0,
+    keyword: str = "",
+    format_name: str = "benefits",
+) -> "Path | None":
     """
-    Pick a music file, cycling through available tracks by variation index.
-    Source is determined by MUSIC_SOURCE in .env:
-      "drive" — fetches from Google Drive folder (with local cache)
-      "local" — reads from MUSIC_DIR recursively (default)
+    Pick a music file, context-aware by format and keyword.
+
+    Mood matching: if D:\\Music for Shorts has subfolders named after moods
+    (e.g. "energetic", "emotional", "dramatic"), the correct subfolder is
+    preferred for each format.  Falls back to the full library when no
+    mood-matching subfolder is found.
+
+    Seed is derived from keyword + format_name + variation so that:
+      - different keywords pick from different regions of the library
+      - different formats naturally favour different tracks
+      - different variation indices never repeat the same track in a batch
     """
     if MUSIC_SOURCE == "drive":
         from src.utils.drive_music import get_drive_music
         return get_drive_music(variation)
 
-    # Local: scan MUSIC_DIR recursively so subfolders (genre/mood) are included
     if not MUSIC_DIR.exists():
         console.print(f"  [yellow]Music folder not found: {MUSIC_DIR}[/yellow]")
         return None
 
-    music_files = sorted(
-        list(MUSIC_DIR.rglob("*.mp3")) +
-        list(MUSIC_DIR.rglob("*.wav")) +
-        list(MUSIC_DIR.rglob("*.m4a"))
-    )
-    if not music_files:
+    # Mood keywords per format — matched against subdir names (case-insensitive)
+    _FORMAT_MOODS: dict[str, list[str]] = {
+        "benefits":        ["upbeat", "energetic", "happy", "positive", "fun", "bright"],
+        "emotion":         ["emotional", "calm", "soft", "slow", "sad", "deep", "ambient"],
+        "hook_transition": ["dynamic", "energetic", "hype", "trap", "powerful", "intense"],
+        "plot_twist":      ["dramatic", "suspense", "cinematic", "intense", "dark", "mystery"],
+    }
+    moods = _FORMAT_MOODS.get(format_name, [])
+
+    def _collect(directory: Path) -> list[Path]:
+        return sorted(
+            list(directory.rglob("*.mp3")) +
+            list(directory.rglob("*.wav")) +
+            list(directory.rglob("*.m4a"))
+        )
+
+    all_files = _collect(MUSIC_DIR)
+    if not all_files:
         console.print(f"  [yellow]No music files found in {MUSIC_DIR}[/yellow]")
         return None
 
-    # Seed * 31 gives a different random sequence from the assembly-order RNG
-    chosen = _random.Random(variation * 31).choice(music_files)
-    console.print(f"  Music: [cyan]{chosen.parent.name}/{chosen.name}[/cyan]")
+    # Try mood-matching subdirs first
+    mood_files: list[Path] = []
+    if moods and MUSIC_DIR.exists():
+        for subdir in MUSIC_DIR.iterdir():
+            if subdir.is_dir():
+                name_lower = subdir.name.lower()
+                if any(m in name_lower for m in moods):
+                    mood_files.extend(_collect(subdir))
+
+    candidates = mood_files if mood_files else all_files
+
+    # Hash-based seed: keyword + format + variation → wide spread, no clustering
+    seed = abs(hash(f"{keyword}_{format_name}_{variation}")) % (2 ** 31)
+    chosen = _random.Random(seed).choice(candidates)
+    src_label = "mood-match" if mood_files else "full library"
+    console.print(
+        f"  Music [{src_label}]: [cyan]{chosen.parent.name}/{chosen.name}[/cyan]"
+    )
     return chosen
 
 
@@ -273,7 +310,7 @@ def assemble_benefits(
         if voice_path and voice_path.exists():
             audio_tracks.append(AudioFileClip(str(voice_path)).volumex(1.0))
 
-        music_path = get_background_music(variation)
+        music_path = get_background_music(variation, keyword, "benefits")
         if music_path:
             music_clip = AudioFileClip(str(music_path))
             music = music_clip.subclip(0, min(music_clip.duration, final_video.duration)).volumex(MUSIC_VOLUME)
@@ -356,7 +393,7 @@ def assemble_emotion(
         if voice_path and voice_path.exists():
             audio_tracks.append(AudioFileClip(str(voice_path)).volumex(1.0))
 
-        music_path = get_background_music(variation)
+        music_path = get_background_music(variation, keyword, "emotion")
         if music_path:
             music_clip = AudioFileClip(str(music_path))
             music = music_clip.subclip(0, min(music_clip.duration, final_video.duration)).volumex(MUSIC_VOLUME)
@@ -444,7 +481,7 @@ def assemble_hook_transition(
             hook_audio = hook_clip.audio.subclip(0, hook_dur)
             audio_tracks.append(hook_audio)
 
-        music_path = get_background_music(variation)
+        music_path = get_background_music(variation, keyword, "hook_transition")
         if music_path:
             product_dur = product_clip.duration
             music_clip = AudioFileClip(str(music_path))
@@ -576,7 +613,7 @@ def assemble_plot_twist(
             final_video = CompositeVideoClip(overlay_layers, size=(FRAME_W, FRAME_H))
 
         # ── Step 5: background music only (no original audio) ─────────────────
-        music_path = get_background_music(variation)
+        music_path = get_background_music(variation, keyword, "plot_twist")
         if music_path:
             music_clip = AudioFileClip(str(music_path))
             music = music_clip.subclip(0, min(music_clip.duration, final_video.duration)).volumex(MUSIC_VOLUME)

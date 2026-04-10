@@ -470,6 +470,7 @@ def _pick_format() -> "tuple[str, str | None]":
     fmt_tbl = _Table(show_header=False, box=None, padding=(0, 2))
     fmt_tbl.add_column(style="cyan bold")
     fmt_tbl.add_column()
+    fmt_tbl.add_row("0", "[bold green]Random[/bold green]          [dim](mix automatico a ogni video)[/dim]")
     fmt_tbl.add_row("1", "Benefits         [dim](hook + benefit texts + CTA)[/dim]")
     fmt_tbl.add_row("2", "Emotion          [dim](testo emotivo centrato fisso)[/dim]")
     fmt_tbl.add_row("3", "Hook Transition  [dim](clip intro + Benefits o Emotion)[/dim]")
@@ -478,8 +479,8 @@ def _pick_format() -> "tuple[str, str | None]":
     console.print("[bold]Formato video:[/bold]")
     console.print(fmt_tbl)
 
-    choice = Prompt.ask("Scelta", choices=["1", "2", "3", "4"], default="1")
-    fmt_map = {"1": "benefits", "2": "emotion", "3": "hook_transition", "4": "plot_twist"}
+    choice = Prompt.ask("Scelta", choices=["0", "1", "2", "3", "4"], default="0")
+    fmt_map = {"0": "random", "1": "benefits", "2": "emotion", "3": "hook_transition", "4": "plot_twist"}
     fmt = fmt_map[choice]
 
     base_format = None
@@ -563,31 +564,51 @@ def mode_generate(keyword: str, args) -> None:
             console.print("  [red]Not enough clips for this variation — skipping[/red]")
             continue
 
+        # Resolve random format per-video
+        _FORMATS_POOL = ["benefits", "emotion", "hook_transition", "plot_twist"]
+        actual_fmt = (
+            random.choice(_FORMATS_POOL) if fmt == "random" else fmt
+        )
+        actual_base = (
+            random.choice(["benefits", "emotion"])
+            if actual_fmt == "hook_transition" and base_format is None
+            else base_format
+        )
+        if fmt == "random":
+            console.print(f"  Format: [bold magenta]{actual_fmt}[/bold magenta]" + (
+                f" [dim]({actual_base})[/dim]" if actual_base else ""
+            ))
+
         asm_kwargs = dict(
             voice_path=None, variation=i,
             target_duration=target_dur, script=script,
         )
-        if fmt == "benefits":
+        _video_t0 = time.time()
+        if actual_fmt == "benefits":
             output_path = assemble_benefits(keyword, clip_paths, **asm_kwargs)
-        elif fmt == "emotion":
+        elif actual_fmt == "emotion":
             output_path = assemble_emotion(keyword, clip_paths, **asm_kwargs)
-        elif fmt == "hook_transition":
+        elif actual_fmt == "hook_transition":
             output_path = assemble_hook_transition(
                 keyword, clip_paths,
-                base_format=base_format or "benefits",
+                base_format=actual_base or "benefits",
                 **asm_kwargs,
             )
-        elif fmt == "plot_twist":
+        elif actual_fmt == "plot_twist":
             output_path = assemble_plot_twist(keyword, clip_paths, **asm_kwargs)
         else:
             output_path = assemble_benefits(keyword, clip_paths, **asm_kwargs)
+
+        _elapsed = time.time() - _video_t0
+        _mins, _secs = divmod(int(_elapsed), 60)
+        console.print(f"  [dim]⏱  Tempo: {_mins}m {_secs:02d}s[/dim]")
 
         if output_path:
             metadata = {
                 "keyword":         keyword,
                 "video_index":     i + 1,
-                "format":          fmt,
-                "base_format":     base_format,
+                "format":          actual_fmt,
+                "base_format":     actual_base,
                 "target_duration": target_dur,
                 "created_at":      datetime.now().strftime("%Y%m%d_%H%M%S"),
                 "script":          script,
