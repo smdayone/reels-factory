@@ -40,7 +40,12 @@ from src.extractor.voice_separator import separate_voice
 from src.extractor.clip_classifier import classify_by_transcript, classify_by_vision
 from src.script.persona_builder import identify_persona
 from src.script.script_generator import generate_script
-from src.assembler.video_builder import select_clips, assemble_video, get_clips_inventory
+from src.assembler.video_builder import (
+    select_clips, get_clips_inventory,
+    assemble_benefits, assemble_emotion,
+    assemble_hook_transition, assemble_plot_twist,
+    assemble_video,  # backwards-compat alias
+)
 
 console = Console()
 
@@ -454,6 +459,45 @@ def _pick_cta() -> "str | None":
     return None
 
 
+def _pick_format() -> "tuple[str, str | None]":
+    """
+    Interactive picker for video format.
+    Returns (format_name, base_format | None).
+    base_format is set only for 'hook_transition'.
+    """
+    from rich.table import Table as _Table
+
+    fmt_tbl = _Table(show_header=False, box=None, padding=(0, 2))
+    fmt_tbl.add_column(style="cyan bold")
+    fmt_tbl.add_column()
+    fmt_tbl.add_row("1", "Benefits         [dim](hook + benefit texts + CTA)[/dim]")
+    fmt_tbl.add_row("2", "Emotion          [dim](testo emotivo centrato fisso)[/dim]")
+    fmt_tbl.add_row("3", "Hook Transition  [dim](clip intro + Benefits o Emotion)[/dim]")
+    fmt_tbl.add_row("4", "Plot Twist       [dim](creator 3s + prodotto, 2 testi)[/dim]")
+    console.print()
+    console.print("[bold]Formato video:[/bold]")
+    console.print(fmt_tbl)
+
+    choice = Prompt.ask("Scelta", choices=["1", "2", "3", "4"], default="1")
+    fmt_map = {"1": "benefits", "2": "emotion", "3": "hook_transition", "4": "plot_twist"}
+    fmt = fmt_map[choice]
+
+    base_format = None
+    if fmt == "hook_transition":
+        base_tbl = _Table(show_header=False, box=None, padding=(0, 2))
+        base_tbl.add_column(style="cyan bold")
+        base_tbl.add_column()
+        base_tbl.add_row("1", "Benefits")
+        base_tbl.add_row("2", "Emotion")
+        console.print()
+        console.print("[bold]Base del video dopo l'hook:[/bold]")
+        console.print(base_tbl)
+        base_choice = Prompt.ask("Scelta", choices=["1", "2"], default="1")
+        base_format = "benefits" if base_choice == "1" else "emotion"
+
+    return fmt, base_format
+
+
 def mode_generate(keyword: str, args) -> None:
     """Generate N final videos from existing clips."""
     total_clips = show_clips_summary(keyword)
@@ -470,10 +514,14 @@ def mode_generate(keyword: str, args) -> None:
 
     n_videos = max(1, min(n_videos, 20))  # clamp 1-20
 
+    # Format — ask once, applied to every video in this batch
+    fmt, base_format = _pick_format()
+
     # CTA — ask once, applied to every video in this batch
     cta_override = _pick_cta()
 
-    console.print(f"\n[bold]Generating {n_videos} video(s) for [cyan]{keyword}[/cyan]...[/bold]\n")
+    fmt_label = fmt if base_format is None else f"{fmt} ({base_format})"
+    console.print(f"\n[bold]Generating {n_videos} video(s) for [cyan]{keyword}[/cyan]  [dim]— {fmt_label}[/dim]...[/bold]\n")
 
     transcripts = load_existing_transcripts(keyword)
     er_refs = load_er_references(keyword)
@@ -515,24 +563,37 @@ def mode_generate(keyword: str, args) -> None:
             console.print("  [red]Not enough clips for this variation — skipping[/red]")
             continue
 
-        output_path = assemble_video(
-            keyword, clip_paths,
-            voice_path=None,
-            variation=i,
-            target_duration=target_dur,
-            script=script,
+        asm_kwargs = dict(
+            voice_path=None, variation=i,
+            target_duration=target_dur, script=script,
         )
+        if fmt == "benefits":
+            output_path = assemble_benefits(keyword, clip_paths, **asm_kwargs)
+        elif fmt == "emotion":
+            output_path = assemble_emotion(keyword, clip_paths, **asm_kwargs)
+        elif fmt == "hook_transition":
+            output_path = assemble_hook_transition(
+                keyword, clip_paths,
+                base_format=base_format or "benefits",
+                **asm_kwargs,
+            )
+        elif fmt == "plot_twist":
+            output_path = assemble_plot_twist(keyword, clip_paths, **asm_kwargs)
+        else:
+            output_path = assemble_benefits(keyword, clip_paths, **asm_kwargs)
 
         if output_path:
             metadata = {
-                "keyword":        keyword,
-                "video_index":    i + 1,
+                "keyword":         keyword,
+                "video_index":     i + 1,
+                "format":          fmt,
+                "base_format":     base_format,
                 "target_duration": target_dur,
-                "created_at":     datetime.now().strftime("%Y%m%d_%H%M%S"),
-                "script":         script,
-                "clips_used":     [str(p) for p in clip_paths],
-                "output":         str(output_path),
-                "post_caption":   script.get("caption", ""),
+                "created_at":      datetime.now().strftime("%Y%m%d_%H%M%S"),
+                "script":          script,
+                "clips_used":      [str(p) for p in clip_paths],
+                "output":          str(output_path),
+                "post_caption":    script.get("caption", ""),
             }
             meta_path = output_path.parent / "post_metadata.json"
             meta_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")

@@ -29,8 +29,11 @@ Structure:
 4. PROOF: one concrete benefit or result — max 8 words
 5. CTA: (will be overridden externally — write a placeholder)
 6. CAPTION: TikTok/IG post caption — see rules below
+7. EMOTION: single emotional statement for full-screen text — max 8 words, raw feeling
+8. PLOT_HOOK: teaser text during creator clip — max 8 words, creates curiosity
+9. PLOT_REVEAL: reveal text after creator clip — max 8 words, introduces the product moment
 
-OVERLAY RULES (sections 1-5):
+OVERLAY RULES (sections 1-5, 7-9):
 - Each section = 1 short line, max 8 words
 - NO punctuation except "—" for pauses
 - NO emoji
@@ -53,6 +56,9 @@ SOLUTION: [text]
 PROOF: [text]
 CTA: [text]
 CAPTION: [text]
+EMOTION: [text]
+PLOT_HOOK: [text]
+PLOT_REVEAL: [text]
 PERSONA_NOTE: [one line explaining why this resonates with the persona]"""
 
 
@@ -95,7 +101,7 @@ def generate_script(
             },
             json={
                 "model": CLAUDE_MODEL,
-                "max_tokens": 800,
+                "max_tokens": 1000,
                 "messages": [{"role": "user", "content": prompt}]
             },
             timeout=30,
@@ -104,7 +110,8 @@ def generate_script(
 
         # Parse sections
         sections = {}
-        for section in ["HOOK", "PROBLEM", "SOLUTION", "PROOF", "CTA", "CAPTION", "PERSONA_NOTE"]:
+        for section in ["HOOK", "PROBLEM", "SOLUTION", "PROOF", "CTA", "CAPTION",
+                         "EMOTION", "PLOT_HOOK", "PLOT_REVEAL", "PERSONA_NOTE"]:
             match = re.search(rf"{section}:\s*(.+?)(?=\n[A-Z_]+:|$)", raw, re.DOTALL)
             if match:
                 sections[section.lower()] = match.group(1).strip()

@@ -34,7 +34,8 @@ _FONT_CANDIDATES = [
     Path(r"C:\Windows\Fonts\arialbd.ttf"),        # Arial Bold
 ]
 
-FONT_SIZE      = 52
+FONT_SIZE         = 52
+FONT_SIZE_EMOTION = 64   # larger font for full-screen emotion text
 WRAP_WIDTH     = 900
 FRAME_W        = 1080
 FRAME_H        = 1920
@@ -240,6 +241,24 @@ def render_benefit_rgba(benefit_text: str, y_frac: float = Y_BENEFIT) -> "np.nda
         )
     except Exception as e:
         console.print(f"  [yellow]Benefit render failed: {e}[/yellow]")
+        return None
+
+
+def render_emotion_rgba(emotion_text: str) -> "np.ndarray | None":
+    """White text + black stroke, centered (50%), 64px font — for Emotion format."""
+    if not emotion_text:
+        return None
+    try:
+        font = _load_font(FONT_SIZE_EMOTION)
+        lines = _wrap_text(emotion_text, font)
+        return _render_stroke_text(
+            lines, font,
+            text_color=(255, 255, 255, 255),
+            stroke_color=(0, 0, 0, 255),
+            y_frac=0.50,
+        )
+    except Exception as e:
+        console.print(f"  [yellow]Emotion render failed: {e}[/yellow]")
         return None
 
 

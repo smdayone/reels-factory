@@ -16,10 +16,11 @@ from moviepy.editor import (
 )
 from config.settings import (
     TARGET_DURATION, MIN_CLIP_DURATION, MAX_CLIP_DURATION, MUSIC_VOLUME,
-    TEXT_MIN_DURATION, get_keyword_paths, MUSIC_DIR, MUSIC_SOURCE
+    TEXT_MIN_DURATION, get_keyword_paths, MUSIC_DIR, MUSIC_SOURCE,
+    HOOK_TRANSITIONS_DIR, CREATORS_DIR,
 )
 from src.assembler.overlay_builder import (
-    render_hook_rgba, render_benefit_rgba, render_cta_rgba,
+    render_hook_rgba, render_benefit_rgba, render_cta_rgba, render_emotion_rgba,
     add_hook_overlay, add_benefit_overlay, add_cta_overlay,  # legacy kept
     FRAME_W, FRAME_H,
 )
@@ -31,6 +32,27 @@ console = Console()
 # Assembly order: categories used in final video, in sequence.
 # "unclassified" is last — used as filler when primary categories are empty.
 ASSEMBLY_ORDER = ["hook", "problem", "solution", "demo", "cta", "unboxing", "unclassified"]
+
+
+def _get_random_video(directory: Path, variation: int = 0) -> "Path | None":
+    """Pick a random .mp4 from directory (seeded by variation * 17)."""
+    files = sorted(directory.rglob("*.mp4"))
+    if not files:
+        console.print(f"  [yellow]No videos in {directory}[/yellow]")
+        return None
+    return _random.Random(variation * 17).choice(files)
+
+
+def _load_and_resize(clip_path: Path, max_dur: "float | None" = None) -> "VideoFileClip":
+    """Load a clip, optionally trim it, and resize to 1080x1920."""
+    clip = VideoFileClip(str(clip_path))
+    if max_dur and clip.duration > max_dur:
+        clip = clip.subclip(0, max_dur)
+    clip = clip.resize(height=1920)
+    if clip.w > 1080:
+        x1 = (clip.w - 1080) // 2
+        clip = clip.crop(x1=x1, width=1080)
+    return clip
 
 
 def get_clips_inventory(keyword: str) -> dict[str, list[Path]]:
@@ -140,23 +162,36 @@ def get_background_music(variation: int = 0) -> Path | None:
     return chosen
 
 
-def assemble_video(
+def _write_video(final_video, output_path: Path, paths: dict, variation: int) -> None:
+    """Write final video to disk (shared export step)."""
+    console.print(f"  Exporting → {output_path}")
+    console.print("  [yellow]Export takes 1-3 min — please wait...[/yellow]")
+    final_video.write_videofile(
+        str(output_path),
+        fps=30,
+        codec="libx264",
+        audio_codec="aac",
+        temp_audiofile=str(paths["temp"] / f"temp_audio_{variation}.m4a"),
+        remove_temp=True,
+        verbose=False,
+        logger=None,
+    )
+
+
+def assemble_benefits(
     keyword: str,
     clip_paths: list[Path],
-    voice_path: Path | None = None,
+    voice_path: "Path | None" = None,
     variation: int = 0,
     target_duration: float = TARGET_DURATION,
     script: dict = {},
-) -> Path | None:
+    output_dir: "Path | None" = None,
+) -> "Path | None":
     """
-    Assemble final vertical video (1080x1920, 30fps).
+    Assemble Benefits format: hook pill + benefit texts per clip + CTA.
     Returns path to output file, or None on failure.
 
-    variation:        picks music track and overlay-position seed.
-    target_duration:  hard cap — video is trimmed to this length if clips overshoot.
-    script:           if provided, adds text overlays with minimum TEXT_MIN_DURATION
-                      screen time. Benefit positions are varied per clip (safe mobile
-                      range 25%-55%) so text never overlaps captions/descriptions.
+    output_dir: if provided, write final.mp4 there instead of creating a new dated dir.
     """
     if not check_ram("video assembly"):
         return None
@@ -166,26 +201,20 @@ def assemble_video(
         return None
 
     paths = get_keyword_paths(keyword)
-    date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = paths["output"] / date_str
+    if output_dir is None:
+        date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = paths["output"] / date_str
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "final.mp4"
 
-    console.print(f"  Assembling {len(clip_paths)} clips...")
+    console.print(f"  Assembling {len(clip_paths)} clips  [dim](Benefits)[/dim]")
 
     try:
-        # ── Step A: load, trim, resize (no overlays yet) ──────────────────────
+        # ── Step A: load, trim, resize ────────────────────────────────────────
         clips = []
         clip_durations: list[float] = []
-
         for cp in clip_paths:
-            clip = VideoFileClip(str(cp))
-            if clip.duration > MAX_CLIP_DURATION:
-                clip = clip.subclip(0, MAX_CLIP_DURATION)
-            clip = clip.resize(height=1920)
-            if clip.w > 1080:
-                x1 = (clip.w - 1080) // 2
-                clip = clip.crop(x1=x1, width=1080)
+            clip = _load_and_resize(cp, max_dur=MAX_CLIP_DURATION)
             clip_durations.append(clip.duration)
             clips.append(clip)
 
@@ -194,46 +223,35 @@ def assemble_video(
         if final_video.duration > target_duration:
             final_video = final_video.subclip(0, target_duration)
 
-        # ── Step C: add text overlays as timed ImageClip layers ───────────────
+        # ── Step C: text overlays ─────────────────────────────────────────────
         if script:
-            # Seeded RNG for benefit Y positions (different seed from assembly + music)
             rng = _random.Random(variation + 7)
             benefit_keys = ["problem", "solution", "proof"]
             n = len(clips)
             overlay_layers = [final_video]
-
-            # Sequential placement: a new text only starts after the previous one ends.
-            # This prevents any overlap when short clips (< TEXT_MIN_DURATION) are used.
             last_text_end = 0.0
 
-            # Compute cumulative start time for each clip
             t = 0.0
             for idx, (clip, dur) in enumerate(zip(clips, clip_durations)):
                 t_start = t
                 t += dur
 
-                # Respect the hard cap: skip clips that start after trim point
                 if t_start >= final_video.duration:
                     break
-
-                # Skip this clip's text if the previous text is still on screen
                 if t_start < last_text_end:
                     continue
 
-                # Text duration: at least TEXT_MIN_DURATION, capped by remaining video
                 text_dur = max(TEXT_MIN_DURATION, dur)
                 text_dur = min(text_dur, final_video.duration - t_start)
                 if text_dur <= 0:
                     continue
 
-                # Pick the right RGBA canvas
                 rgba = None
                 if idx == 0:
                     rgba = render_hook_rgba(script.get("hook", ""))
                 elif idx == n - 1:
                     rgba = render_cta_rgba(script.get("cta", ""))
                 else:
-                    # Vary vertical position per benefit (safe mobile range: 25%-55%)
                     y_frac = rng.uniform(0.25, 0.55)
                     key = benefit_keys[(idx - 1) % len(benefit_keys)]
                     rgba = render_benefit_rgba(script.get(key, ""), y_frac)
@@ -250,37 +268,22 @@ def assemble_video(
             if len(overlay_layers) > 1:
                 final_video = CompositeVideoClip(overlay_layers, size=(FRAME_W, FRAME_H))
 
-        # ── Step D: audio — voice track + background music ────────────────────
+        # ── Step D: audio ─────────────────────────────────────────────────────
         audio_tracks = []
         if voice_path and voice_path.exists():
-            voice = AudioFileClip(str(voice_path))
-            voice = voice.volumex(1.0)
-            audio_tracks.append(voice)
+            audio_tracks.append(AudioFileClip(str(voice_path)).volumex(1.0))
 
         music_path = get_background_music(variation)
         if music_path:
-            music = AudioFileClip(str(music_path))
-            music = music.subclip(0, min(music.duration, final_video.duration))
-            music = music.volumex(MUSIC_VOLUME)
+            music_clip = AudioFileClip(str(music_path))
+            music = music_clip.subclip(0, min(music_clip.duration, final_video.duration)).volumex(MUSIC_VOLUME)
             audio_tracks.append(music)
 
         if audio_tracks:
-            final_audio = CompositeAudioClip(audio_tracks)
-            final_video = final_video.set_audio(final_audio)
+            final_video = final_video.set_audio(CompositeAudioClip(audio_tracks))
 
-        # ── Step E: export ─────────────────────────────────────────────────────
-        console.print(f"  Exporting → {output_path}")
-        console.print("  [yellow]Export takes 1-3 min — please wait...[/yellow]")
-        final_video.write_videofile(
-            str(output_path),
-            fps=30,
-            codec="libx264",
-            audio_codec="aac",
-            temp_audiofile=str(paths["temp"] / f"temp_audio_{variation}.m4a"),
-            remove_temp=True,
-            verbose=False,
-            logger=None,
-        )
+        # ── Step E: export ────────────────────────────────────────────────────
+        _write_video(final_video, output_path, paths, variation)
 
         for clip in clips:
             clip.close()
@@ -291,4 +294,305 @@ def assemble_video(
 
     except Exception as e:
         console.print(f"  [red]Assembly failed: {e}[/red]")
+        return None
+
+
+def assemble_video(
+    keyword: str,
+    clip_paths: list[Path],
+    voice_path: "Path | None" = None,
+    variation: int = 0,
+    target_duration: float = TARGET_DURATION,
+    script: dict = {},
+) -> "Path | None":
+    """Backwards-compatible alias for assemble_benefits()."""
+    return assemble_benefits(
+        keyword, clip_paths, voice_path, variation, target_duration, script
+    )
+
+
+def assemble_emotion(
+    keyword: str,
+    clip_paths: list[Path],
+    voice_path: "Path | None" = None,
+    variation: int = 0,
+    target_duration: float = TARGET_DURATION,
+    script: dict = {},
+    output_dir: "Path | None" = None,
+) -> "Path | None":
+    """
+    Emotion format: single centered emotional text overlay for the full video.
+    """
+    if not check_ram("video assembly"):
+        return None
+    if not clip_paths:
+        console.print("  [red]No clips to assemble[/red]")
+        return None
+
+    paths = get_keyword_paths(keyword)
+    if output_dir is None:
+        date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = paths["output"] / date_str
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "final.mp4"
+
+    console.print(f"  Assembling {len(clip_paths)} clips  [dim](Emotion)[/dim]")
+
+    try:
+        # ── Step A+B: load, resize, concatenate, trim ─────────────────────────
+        clips = [_load_and_resize(cp, max_dur=MAX_CLIP_DURATION) for cp in clip_paths]
+        final_video = concatenate_videoclips(clips, method="compose")
+        if final_video.duration > target_duration:
+            final_video = final_video.subclip(0, target_duration)
+
+        # ── Step C: single full-duration emotion overlay ───────────────────────
+        rgba = render_emotion_rgba(script.get("emotion", ""))
+        if rgba is not None:
+            layer = ImageClip(rgba, ismask=False).set_duration(final_video.duration)
+            final_video = CompositeVideoClip([final_video, layer], size=(FRAME_W, FRAME_H))
+
+        # ── Step D: audio ─────────────────────────────────────────────────────
+        audio_tracks = []
+        if voice_path and voice_path.exists():
+            audio_tracks.append(AudioFileClip(str(voice_path)).volumex(1.0))
+
+        music_path = get_background_music(variation)
+        if music_path:
+            music_clip = AudioFileClip(str(music_path))
+            music = music_clip.subclip(0, min(music_clip.duration, final_video.duration)).volumex(MUSIC_VOLUME)
+            audio_tracks.append(music)
+
+        if audio_tracks:
+            final_video = final_video.set_audio(CompositeAudioClip(audio_tracks))
+
+        # ── Step E: export ────────────────────────────────────────────────────
+        _write_video(final_video, output_path, paths, variation)
+
+        for clip in clips:
+            clip.close()
+        final_video.close()
+
+        console.print(f"  [green]Done → {output_path}[/green]")
+        return output_path
+
+    except Exception as e:
+        console.print(f"  [red]Assembly failed: {e}[/red]")
+        return None
+
+
+def assemble_hook_transition(
+    keyword: str,
+    clip_paths: list[Path],
+    base_format: str = "benefits",
+    voice_path: "Path | None" = None,
+    variation: int = 0,
+    target_duration: float = TARGET_DURATION,
+    script: dict = {},
+) -> "Path | None":
+    """
+    Hook Transition format: random clip from D:\\Hook Transitions (original audio)
+    concatenated with a Benefits or Emotion product video.
+    """
+    if not check_ram("video assembly"):
+        return None
+
+    hook_clip_path = _get_random_video(HOOK_TRANSITIONS_DIR, variation)
+    if hook_clip_path is None:
+        console.print("  [yellow]Hook Transitions folder empty — falling back to Benefits[/yellow]")
+        return assemble_benefits(keyword, clip_paths, voice_path, variation, target_duration, script)
+
+    paths = get_keyword_paths(keyword)
+    date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = paths["output"] / date_str
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "final.mp4"
+    temp_product = paths["temp"] / f"product_section_{variation}.mp4"
+
+    console.print(
+        f"  Assembling  [dim](Hook Transition → {base_format})[/dim]\n"
+        f"  Hook clip: [cyan]{hook_clip_path.name}[/cyan]"
+    )
+
+    try:
+        # ── Step 1: assemble product section to a temp file ───────────────────
+        assembler = assemble_emotion if base_format == "emotion" else assemble_benefits
+        assembler(
+            keyword, clip_paths, voice_path, variation, target_duration, script,
+            output_dir=paths["temp"] / f"product_tmp_{variation}",
+        )
+        product_tmp_dir = paths["temp"] / f"product_tmp_{variation}"
+        product_tmp_file = product_tmp_dir / "final.mp4"
+
+        if not product_tmp_file.exists():
+            console.print("  [red]Product section assembly failed[/red]")
+            return None
+
+        # ── Step 2: load hook clip (keep original audio) + product clip ───────
+        hook_clip = _load_and_resize(hook_clip_path)
+        hook_dur = hook_clip.duration
+        product_clip = VideoFileClip(str(product_tmp_file))
+
+        # Strip audio from product clip — we'll replace it below
+        product_video_only = product_clip.without_audio()
+
+        # ── Step 3: concatenate ───────────────────────────────────────────────
+        final_video = concatenate_videoclips([hook_clip.without_audio(), product_video_only], method="compose")
+
+        # ── Step 4: composite audio — hook audio + music starting after hook ──
+        audio_tracks = []
+        if hook_clip.audio:
+            hook_audio = hook_clip.audio.subclip(0, hook_dur)
+            audio_tracks.append(hook_audio)
+
+        music_path = get_background_music(variation)
+        if music_path:
+            product_dur = product_clip.duration
+            music_clip = AudioFileClip(str(music_path))
+            music = (
+                music_clip
+                .subclip(0, min(music_clip.duration, product_dur))
+                .volumex(MUSIC_VOLUME)
+                .set_start(hook_dur)
+            )
+            audio_tracks.append(music)
+
+        if audio_tracks:
+            final_video = final_video.set_audio(CompositeAudioClip(audio_tracks))
+
+        # ── Step 5: export ────────────────────────────────────────────────────
+        _write_video(final_video, output_path, paths, variation)
+
+        hook_clip.close()
+        product_clip.close()
+        final_video.close()
+
+        # Clean up temp product file
+        try:
+            product_tmp_file.unlink(missing_ok=True)
+            product_tmp_dir.rmdir()
+        except Exception:
+            pass
+
+        console.print(f"  [green]Done → {output_path}[/green]")
+        return output_path
+
+    except Exception as e:
+        console.print(f"  [red]Hook Transition assembly failed: {e}[/red]")
+        return None
+
+
+def assemble_plot_twist(
+    keyword: str,
+    clip_paths: list[Path],
+    voice_path: "Path | None" = None,
+    variation: int = 0,
+    target_duration: float = TARGET_DURATION,
+    script: dict = {},
+) -> "Path | None":
+    """
+    Plot Twist format: 3×1s cuts of a creator clip + product clips.
+    PLOT_HOOK text during creator section, PLOT_REVEAL text during product section.
+    Audio: background music only (no original audio from any clip).
+    """
+    if not check_ram("video assembly"):
+        return None
+
+    creator_path = _get_random_video(CREATORS_DIR, variation)
+    if creator_path is None:
+        console.print("  [red]Creators folder empty — cannot assemble Plot Twist[/red]")
+        return None
+
+    if not clip_paths:
+        console.print("  [red]No product clips to assemble[/red]")
+        return None
+
+    paths = get_keyword_paths(keyword)
+    date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = paths["output"] / date_str
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "final.mp4"
+
+    console.print(
+        f"  Assembling  [dim](Plot Twist)[/dim]\n"
+        f"  Creator clip: [cyan]{creator_path.name}[/cyan]"
+    )
+
+    try:
+        # ── Step 1: creator section — 3 × 1s subclips from same file ─────────
+        creator_raw = VideoFileClip(str(creator_path))
+        creator_clips = []
+        for i in range(3):
+            if i >= creator_raw.duration:
+                break
+            end = min(i + 1, creator_raw.duration)
+            sub = creator_raw.subclip(i, end)
+            sub = sub.resize(height=1920)
+            if sub.w > 1080:
+                x1 = (sub.w - 1080) // 2
+                sub = sub.crop(x1=x1, width=1080)
+            creator_clips.append(sub)
+
+        if not creator_clips:
+            console.print("  [red]Creator clip too short[/red]")
+            creator_raw.close()
+            return None
+
+        creator_section = concatenate_videoclips(creator_clips, method="compose")
+        creator_dur = creator_section.duration
+
+        # ── Step 2: product section ───────────────────────────────────────────
+        product_clips = [_load_and_resize(cp, max_dur=MAX_CLIP_DURATION) for cp in clip_paths]
+        product_section = concatenate_videoclips(product_clips, method="compose")
+
+        # ── Step 3: concatenate + trim ────────────────────────────────────────
+        final_video = concatenate_videoclips([creator_section, product_section], method="compose")
+        if final_video.duration > target_duration:
+            final_video = final_video.subclip(0, target_duration)
+
+        # ── Step 4: text overlays ─────────────────────────────────────────────
+        overlay_layers = [final_video]
+
+        plot_hook_rgba = render_emotion_rgba(script.get("plot_hook", ""))
+        if plot_hook_rgba is not None:
+            hook_dur = min(creator_dur, final_video.duration)
+            layer = (
+                ImageClip(plot_hook_rgba, ismask=False)
+                .set_start(0)
+                .set_duration(hook_dur)
+            )
+            overlay_layers.append(layer)
+
+        plot_reveal_rgba = render_emotion_rgba(script.get("plot_reveal", ""))
+        if plot_reveal_rgba is not None and creator_dur < final_video.duration:
+            reveal_dur = final_video.duration - creator_dur
+            layer = (
+                ImageClip(plot_reveal_rgba, ismask=False)
+                .set_start(creator_dur)
+                .set_duration(reveal_dur)
+            )
+            overlay_layers.append(layer)
+
+        if len(overlay_layers) > 1:
+            final_video = CompositeVideoClip(overlay_layers, size=(FRAME_W, FRAME_H))
+
+        # ── Step 5: background music only (no original audio) ─────────────────
+        music_path = get_background_music(variation)
+        if music_path:
+            music_clip = AudioFileClip(str(music_path))
+            music = music_clip.subclip(0, min(music_clip.duration, final_video.duration)).volumex(MUSIC_VOLUME)
+            final_video = final_video.set_audio(music)
+
+        # ── Step 6: export ────────────────────────────────────────────────────
+        _write_video(final_video, output_path, paths, variation)
+
+        creator_raw.close()
+        for clip in product_clips:
+            clip.close()
+        final_video.close()
+
+        console.print(f"  [green]Done → {output_path}[/green]")
+        return output_path
+
+    except Exception as e:
+        console.print(f"  [red]Plot Twist assembly failed: {e}[/red]")
         return None

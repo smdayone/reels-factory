@@ -15,6 +15,12 @@ SSD_BASE  = Path(f"{SSD_DRIVE}:\\Products Reels")
 # Default: D:\Music for Shorts  (change via MUSIC_FOLDER in .env)
 MUSIC_DIR = Path(os.getenv("MUSIC_FOLDER", f"{SSD_DRIVE}:\\Music for Shorts"))
 
+# Hook Transition clips — video intro with original audio (format: Hook Transition)
+HOOK_TRANSITIONS_DIR = Path(os.getenv("HOOK_TRANSITIONS_DIR", "D:\\Hook Transitions"))
+
+# Creator clips — 3-second intros for Plot Twist format
+CREATORS_DIR = Path(os.getenv("CREATORS_DIR", "D:\\Creators"))
+
 def get_keyword_paths(keyword: str) -> dict:
     """Return all paths for a given keyword."""
     base = SSD_BASE / keyword
