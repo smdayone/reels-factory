@@ -8,6 +8,7 @@ if not hasattr(PIL.Image, "ANTIALIAS"):
     PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
 
 import random as _random
+import subprocess
 from pathlib import Path
 from datetime import datetime
 from moviepy.editor import (
@@ -17,7 +18,7 @@ from moviepy.editor import (
 from config.settings import (
     TARGET_DURATION, MIN_CLIP_DURATION, MAX_CLIP_DURATION, MUSIC_VOLUME,
     TEXT_MIN_DURATION, get_keyword_paths, MUSIC_DIR, MUSIC_SOURCE,
-    HOOK_TRANSITIONS_DIR, CREATORS_DIR,
+    HOOK_TRANSITIONS_DIR, CREATORS_DIR, HD_FILTER_ENABLED,
 )
 from src.assembler.overlay_builder import (
     render_hook_rgba, render_benefit_rgba, render_cta_rgba, render_emotion_rgba,
@@ -30,17 +31,75 @@ from rich.console import Console
 console = Console()
 
 # Assembly order: categories used in final video, in sequence.
+# "ai" (manually loaded AI-generated clips) has high priority after hook.
 # "unclassified" is last — used as filler when primary categories are empty.
-ASSEMBLY_ORDER = ["hook", "problem", "solution", "demo", "cta", "unboxing", "unclassified"]
+ASSEMBLY_ORDER = ["hook", "ai", "problem", "solution", "demo", "cta", "unboxing", "unclassified"]
 
 
-def _get_random_video(directory: Path, variation: int = 0) -> "Path | None":
-    """Pick a random .mp4 from directory (seeded by variation * 17)."""
+def _get_random_video(
+    directory: Path,
+    variation: int = 0,
+    history: "AssetHistory | None" = None,
+    asset_type: str = "hook_clip",
+) -> "Path | None":
+    """
+    Pick a random .mp4 from directory, avoiding recently used ones (history).
+    Seeded shuffle ensures deterministic ordering; iterates until a fresh pick is found.
+    Falls back to first candidate if all have been used recently.
+    """
     files = sorted(directory.rglob("*.mp4"))
     if not files:
         console.print(f"  [yellow]No videos in {directory}[/yellow]")
         return None
-    return _random.Random(variation * 17).choice(files)
+
+    rng = _random.Random(variation * 17)
+    shuffled = files[:]
+    rng.shuffle(shuffled)
+
+    for candidate in shuffled:
+        if history is None or not history.is_recent(asset_type, candidate.name):
+            if history:
+                history.add(asset_type, candidate.name)
+            return candidate
+
+    # All recently used — return first anyway (can't block generation)
+    return shuffled[0]
+
+
+# Type alias for history — avoids circular import (imported lazily in callers)
+AssetHistory = "object"  # real type: src.utils.asset_history.AssetHistory
+
+
+def apply_hd_filter(output_path: Path) -> Path:
+    """
+    Post-generation HD sharpening pass via FFmpeg.
+    Applies: unsharp mask + slight contrast/saturation boost.
+    Replaces the original file in-place (final.mp4 → final_hd.mp4 → final.mp4).
+    Returns the (unchanged) output_path.
+    """
+    hd_path = output_path.parent / "final_hd.mp4"
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(output_path),
+        "-vf", "unsharp=5:5:1.0:5:5:0.0,eq=contrast=1.05:saturation=1.1",
+        "-c:v", "libx264", "-crf", "18", "-preset", "slow",
+        "-c:a", "copy",
+        "-loglevel", "error",
+        str(hd_path),
+    ]
+    console.print("  Applying HD filter (sharpening + contrast)...")
+    result = subprocess.run(cmd, check=False)
+    if result.returncode == 0 and hd_path.exists():
+        try:
+            output_path.unlink(missing_ok=True)
+            hd_path.rename(output_path)
+            console.print("  [green]HD filter applied[/green]")
+        except Exception as e:
+            console.print(f"  [yellow]HD filter rename failed: {e}[/yellow]")
+    else:
+        console.print("  [yellow]HD filter failed — using original video[/yellow]")
+        hd_path.unlink(missing_ok=True)
+    return output_path
 
 
 def _load_and_resize(clip_path: Path, max_dur: "float | None" = None) -> "VideoFileClip":
@@ -135,6 +194,7 @@ def get_background_music(
     variation: int = 0,
     keyword: str = "",
     format_name: str = "benefits",
+    history: "AssetHistory | None" = None,
 ) -> "Path | None":
     """
     Pick a music file, context-aware by format and keyword.
@@ -188,19 +248,30 @@ def get_background_music(
                     mood_files.extend(_collect(subdir))
 
     candidates = mood_files if mood_files else all_files
+    src_label = "mood-match" if mood_files else "full library"
 
     # Hash-based seed: keyword + format + variation → wide spread, no clustering
     seed = abs(hash(f"{keyword}_{format_name}_{variation}")) % (2 ** 31)
-    chosen = _random.Random(seed).choice(candidates)
-    src_label = "mood-match" if mood_files else "full library"
-    console.print(
-        f"  Music [{src_label}]: [cyan]{chosen.parent.name}/{chosen.name}[/cyan]"
-    )
+    rng = _random.Random(seed)
+    shuffled = candidates[:]
+    rng.shuffle(shuffled)
+
+    # Iterate until we find a track not used recently (history-aware)
+    for track in shuffled:
+        if history is None or not history.is_recent("music", track.name):
+            if history:
+                history.add("music", track.name)
+            console.print(f"  Music [{src_label}]: [cyan]{track.parent.name}/{track.name}[/cyan]")
+            return track
+
+    # All recently used — fall back to first shuffled track
+    chosen = shuffled[0]
+    console.print(f"  Music [{src_label}]: [cyan]{chosen.parent.name}/{chosen.name}[/cyan]")
     return chosen
 
 
 def _write_video(final_video, output_path: Path, paths: dict, variation: int) -> None:
-    """Write final video to disk (shared export step)."""
+    """Write final video to disk then optionally apply HD sharpening filter."""
     console.print(f"  Exporting → {output_path}")
     console.print("  [yellow]Export takes 1-3 min — please wait...[/yellow]")
     final_video.write_videofile(
@@ -213,6 +284,8 @@ def _write_video(final_video, output_path: Path, paths: dict, variation: int) ->
         verbose=False,
         logger=None,
     )
+    if HD_FILTER_ENABLED:
+        apply_hd_filter(output_path)
 
 
 def assemble_benefits(
@@ -223,11 +296,11 @@ def assemble_benefits(
     target_duration: float = TARGET_DURATION,
     script: dict = {},
     output_dir: "Path | None" = None,
+    history: "AssetHistory | None" = None,
 ) -> "Path | None":
     """
-    Assemble Benefits format: hook pill + benefit texts per clip + CTA.
-    Returns path to output file, or None on failure.
-
+    Assemble Benefits format: hook stroke text + benefit texts per clip + CTA stroke text.
+    Hook y_frac is randomised per video (0.30–0.50, seed variation+13).
     output_dir: if provided, write final.mp4 there instead of creating a new dated dir.
     """
     if not check_ram("video assembly"):
@@ -262,7 +335,8 @@ def assemble_benefits(
 
         # ── Step C: text overlays ─────────────────────────────────────────────
         if script:
-            rng = _random.Random(variation + 7)
+            rng = _random.Random(variation + 7)     # benefit y positions
+            hook_y = _random.Random(variation + 13).uniform(0.30, 0.50)  # hook position
             benefit_keys = ["problem", "solution", "proof"]
             n = len(clips)
             overlay_layers = [final_video]
@@ -285,7 +359,7 @@ def assemble_benefits(
 
                 rgba = None
                 if idx == 0:
-                    rgba = render_hook_rgba(script.get("hook", ""))
+                    rgba = render_hook_rgba(script.get("hook", ""), y_frac=hook_y)
                 elif idx == n - 1:
                     rgba = render_cta_rgba(script.get("cta", ""))
                 else:
@@ -310,7 +384,7 @@ def assemble_benefits(
         if voice_path and voice_path.exists():
             audio_tracks.append(AudioFileClip(str(voice_path)).volumex(1.0))
 
-        music_path = get_background_music(variation, keyword, "benefits")
+        music_path = get_background_music(variation, keyword, "benefits", history)
         if music_path:
             music_clip = AudioFileClip(str(music_path))
             music = music_clip.subclip(0, min(music_clip.duration, final_video.duration)).volumex(MUSIC_VOLUME)
@@ -356,6 +430,7 @@ def assemble_emotion(
     target_duration: float = TARGET_DURATION,
     script: dict = {},
     output_dir: "Path | None" = None,
+    history: "AssetHistory | None" = None,
 ) -> "Path | None":
     """
     Emotion format: single centered emotional text overlay for the full video.
@@ -393,7 +468,7 @@ def assemble_emotion(
         if voice_path and voice_path.exists():
             audio_tracks.append(AudioFileClip(str(voice_path)).volumex(1.0))
 
-        music_path = get_background_music(variation, keyword, "emotion")
+        music_path = get_background_music(variation, keyword, "emotion", history)
         if music_path:
             music_clip = AudioFileClip(str(music_path))
             music = music_clip.subclip(0, min(music_clip.duration, final_video.duration)).volumex(MUSIC_VOLUME)
@@ -425,6 +500,7 @@ def assemble_hook_transition(
     variation: int = 0,
     target_duration: float = TARGET_DURATION,
     script: dict = {},
+    history: "AssetHistory | None" = None,
 ) -> "Path | None":
     """
     Hook Transition format: random clip from D:\\Hook Transitions (original audio)
@@ -433,10 +509,10 @@ def assemble_hook_transition(
     if not check_ram("video assembly"):
         return None
 
-    hook_clip_path = _get_random_video(HOOK_TRANSITIONS_DIR, variation)
+    hook_clip_path = _get_random_video(HOOK_TRANSITIONS_DIR, variation, history, "hook_clip")
     if hook_clip_path is None:
         console.print("  [yellow]Hook Transitions folder empty — falling back to Benefits[/yellow]")
-        return assemble_benefits(keyword, clip_paths, voice_path, variation, target_duration, script)
+        return assemble_benefits(keyword, clip_paths, voice_path, variation, target_duration, script, history=history)
 
     paths = get_keyword_paths(keyword)
     date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -456,6 +532,7 @@ def assemble_hook_transition(
         assembler(
             keyword, clip_paths, voice_path, variation, target_duration, script,
             output_dir=paths["temp"] / f"product_tmp_{variation}",
+            history=history,
         )
         product_tmp_dir = paths["temp"] / f"product_tmp_{variation}"
         product_tmp_file = product_tmp_dir / "final.mp4"
@@ -481,7 +558,7 @@ def assemble_hook_transition(
             hook_audio = hook_clip.audio.subclip(0, hook_dur)
             audio_tracks.append(hook_audio)
 
-        music_path = get_background_music(variation, keyword, "hook_transition")
+        music_path = get_background_music(variation, keyword, "hook_transition", history)
         if music_path:
             product_dur = product_clip.duration
             music_clip = AudioFileClip(str(music_path))
@@ -525,6 +602,7 @@ def assemble_plot_twist(
     variation: int = 0,
     target_duration: float = TARGET_DURATION,
     script: dict = {},
+    history: "AssetHistory | None" = None,
 ) -> "Path | None":
     """
     Plot Twist format: 3×1s cuts of a creator clip + product clips.
@@ -534,7 +612,7 @@ def assemble_plot_twist(
     if not check_ram("video assembly"):
         return None
 
-    creator_path = _get_random_video(CREATORS_DIR, variation)
+    creator_path = _get_random_video(CREATORS_DIR, variation, history, "creator_clip")
     if creator_path is None:
         console.print("  [red]Creators folder empty — cannot assemble Plot Twist[/red]")
         return None
@@ -613,7 +691,7 @@ def assemble_plot_twist(
             final_video = CompositeVideoClip(overlay_layers, size=(FRAME_W, FRAME_H))
 
         # ── Step 5: background music only (no original audio) ─────────────────
-        music_path = get_background_music(variation, keyword, "plot_twist")
+        music_path = get_background_music(variation, keyword, "plot_twist", history)
         if music_path:
             music_clip = AudioFileClip(str(music_path))
             music = music_clip.subclip(0, min(music_clip.duration, final_video.duration)).volumex(MUSIC_VOLUME)

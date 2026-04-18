@@ -29,6 +29,7 @@ def get_keyword_paths(keyword: str) -> dict:
         "raw":           base / "raw",
         "clips": {
             "hook":          base / "clips" / "hook",
+            "ai":            base / "clips" / "ai",          # AI-generated clips — loaded manually
             "problem":       base / "clips" / "problem",
             "solution":      base / "clips" / "solution",
             "demo":          base / "clips" / "demo",
@@ -47,7 +48,9 @@ def create_keyword_dirs(keyword: str):
     """Create all directories for a keyword."""
     paths = get_keyword_paths(keyword)
     paths["raw"].mkdir(parents=True, exist_ok=True)
-    for clip_dir in paths["clips"].values():
+    for cat, clip_dir in paths["clips"].items():
+        if cat == "ai":
+            continue  # ai/ is loaded manually by the user — do not auto-create
         clip_dir.mkdir(parents=True, exist_ok=True)
     paths["voice"].mkdir(parents=True, exist_ok=True)
     paths["music_stems"].mkdir(parents=True, exist_ok=True)
@@ -91,6 +94,10 @@ TEXT_MIN_DURATION = float(os.getenv("TEXT_MIN_DURATION", 3.0))
 # CTA defaults (overridden interactively in mode_generate)
 CTA_MODE         = os.getenv("CTA_MODE", "generic")   # "comment" | "generic"
 CTA_COMMENT_WORD = os.getenv("CTA_COMMENT_WORD", "INFO")
+
+# Post-generation HD sharpening filter via FFmpeg (unsharp + contrast boost).
+# Set HD_FILTER=false in .env to disable.
+HD_FILTER_ENABLED = os.getenv("HD_FILTER", "true").lower() == "true"
 
 # Clip category keywords for transcript-based classification
 CLIP_KEYWORDS = {

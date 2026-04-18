@@ -18,6 +18,7 @@ Output: D:/Products Reels/[keyword]/output/[YYYYMMDD_HHMMSS]/final.mp4
 import argparse
 import json
 import random
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -46,8 +47,21 @@ from src.assembler.video_builder import (
     assemble_hook_transition, assemble_plot_twist,
     assemble_video,  # backwards-compat alias
 )
+from src.utils.asset_history import AssetHistory
 
 console = Console()
+
+
+def _clean_text(text: str) -> str:
+    """Strip special/punctuation characters from overlay text.
+    Keeps: letters, digits, spaces, apostrophe.
+    Removes: em-dash, en-dash, slash, commas, periods, symbols, etc.
+    """
+    text = text.replace("\u2014", " ").replace("\u2013", " ")  # em-dash, en-dash
+    text = text.replace("/", " ").replace("\\", " ")
+    text = re.sub(r"[^\w\s']", " ", text)        # keep word chars + space + apostrophe
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -142,15 +156,18 @@ def show_clips_summary(keyword: str) -> int:
     table.add_column("Total duration", justify="right")
 
     total_clips = 0
-    for category in ["hook", "problem", "solution", "demo", "unboxing", "cta", "unclassified"]:
+    _SHOW_CATS = ["hook", "ai", "problem", "solution", "demo", "unboxing", "cta", "unclassified"]
+    for category in _SHOW_CATS:
         clips = inventory.get(category, [])
+        if not clips:
+            continue  # skip empty / non-existent categories (incl. 'ai' when not loaded)
         dur = 0.0
         for c in clips:
             d = get_video_duration(c)
             if d:
                 dur += d
-        if clips:
-            table.add_row(category, str(len(clips)), f"{dur:.1f}s")
+        label = f"[bold green]{category} (AI)[/bold green]" if category == "ai" else category
+        table.add_row(label, str(len(clips)), f"{dur:.1f}s")
         total_clips += len(clips)
 
     console.print()
@@ -529,6 +546,11 @@ def mode_generate(keyword: str, args) -> None:
     if er_refs:
         console.print(f"  [dim]Using {len(er_refs)} high-ER caption reference(s) as inspiration[/dim]\n")
 
+    # Asset history — loaded once per batch, saved after each video
+    paths = get_keyword_paths(keyword)
+    history = AssetHistory(paths["base"])
+    history.load()
+
     generated: list[Path] = []
 
     for i in range(n_videos):
@@ -548,6 +570,12 @@ def mode_generate(keyword: str, args) -> None:
                 er_references=er_refs,
             )
             if script:
+                # Clean overlay fields — remove special chars for human-like text
+                _OVERLAY_FIELDS = ["hook", "problem", "solution", "proof",
+                                   "emotion", "plot_hook", "plot_reveal"]
+                for field in _OVERLAY_FIELDS:
+                    if script.get(field):
+                        script[field] = _clean_text(script[field])
                 console.print(f"  [green]Script generated[/green]")
                 console.print(f"  [bold]Hook:[/bold] {script.get('hook', '')}")
 
@@ -582,6 +610,7 @@ def mode_generate(keyword: str, args) -> None:
         asm_kwargs = dict(
             voice_path=None, variation=i,
             target_duration=target_dur, script=script,
+            history=history,
         )
         _video_t0 = time.time()
         if actual_fmt == "benefits":
@@ -601,9 +630,18 @@ def mode_generate(keyword: str, args) -> None:
 
         _elapsed = time.time() - _video_t0
         _mins, _secs = divmod(int(_elapsed), 60)
-        console.print(f"  [dim]⏱  Tempo: {_mins}m {_secs:02d}s[/dim]")
+        console.print(f"  [dim]\u23f1  Tempo: {_mins}m {_secs:02d}s[/dim]")
 
         if output_path:
+            # Record text assets in history to avoid repetition in next videos
+            if script.get("caption"):
+                history.add("caption", script["caption"])
+            for field in ["hook", "problem", "solution", "proof",
+                          "emotion", "plot_hook", "plot_reveal"]:
+                if script.get(field):
+                    history.add(f"{field}_text", script[field])
+            history.save()  # persist after every video
+
             metadata = {
                 "keyword":         keyword,
                 "video_index":     i + 1,

@@ -35,9 +35,11 @@ Structure:
 
 OVERLAY RULES (sections 1-5, 7-9):
 - Each section = 1 short line, max 8 words
-- NO punctuation except "—" for pauses
-- NO emoji
+- NO punctuation of any kind — no em-dash, no comma, no period, no colon, no slash
+- NO emoji, NO special characters, NO symbols
+- NO abbreviations with symbols (write "air conditioner" not "A/C", "and" not "&")
 - Sentence case (first word capitalised only)
+- Plain conversational English — write as you would text a friend
 - Never mention price, never say buy/purchase/shop/order
 - No superlatives without evidence
 

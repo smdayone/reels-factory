@@ -2,22 +2,16 @@
 Text overlay builder for TikTok/Reels-style text on video clips.
 Uses Pillow — no ImageMagick required.
 
-Overlay types:
-  hook     — white pill background, black bold text, TOP position (8% from top)
-  benefit  — white text with black stroke, no background, variable position (25-55%)
-  cta      — black pill background, white bold text, CENTER-BOTTOM (72%)
+All overlay types use white text + bold black stroke, NO pill backgrounds.
 
-Font: Bahnschrift (modern geometric, Windows 10+) → Segoe UI Bold → Arial Bold → PIL default
+Font: Roboto Light (user installs) → Segoe UI Light → Segoe UI Bold → Arial Bold → PIL default
 Letter spacing: LETTER_SPACING pixels between characters (negative = tighter)
 
-Public API (two levels):
-  render_hook_rgba(text)            -> np.ndarray | None   (RGBA canvas)
+Public API:
+  render_hook_rgba(text, y_frac)    -> np.ndarray | None   (RGBA canvas, y_frac 0.30-0.50)
   render_benefit_rgba(text, y_frac) -> np.ndarray | None
   render_cta_rgba(text)             -> np.ndarray | None
-
-  add_hook_overlay(clip, text)      -> clip  (legacy wrappers, still usable)
-  add_benefit_overlay(clip, text, y_frac=Y_BENEFIT)
-  add_cta_overlay(clip, text)
+  render_emotion_rgba(text)         -> np.ndarray | None
 """
 import numpy as np
 from pathlib import Path
@@ -29,29 +23,25 @@ console = Console()
 
 # ── layout constants ─────────────────────────────────────────────────────────
 _FONT_CANDIDATES = [
-    Path(r"C:\Windows\Fonts\segoeuib.ttf"),       # Segoe UI Bold — true bold weight, primary
-    Path(r"C:\Windows\Fonts\bahnschrift.ttf"),     # Bahnschrift — modern geometric, fallback
-    Path(r"C:\Windows\Fonts\arialbd.ttf"),         # Arial Bold
+    Path(r"C:\Windows\Fonts\Roboto-Light.ttf"),    # Roboto Light — primary (user installs)
+    Path(r"C:\Users\Windows20\AppData\Local\Microsoft\Windows\Fonts\Roboto-Light.ttf"),
+    Path(r"C:\Windows\Fonts\segoeuil.ttf"),        # Segoe UI Light — similar light fallback
+    Path(r"C:\Windows\Fonts\segoeuib.ttf"),        # Segoe UI Bold — last resort
+    Path(r"C:\Windows\Fonts\arialbd.ttf"),
 ]
 
-FONT_SIZE         = 46             # reduced for cleaner look on mobile (was 52)
-FONT_SIZE_EMOTION = 58             # full-screen emotion text (was 64)
+FONT_SIZE         = 46
+FONT_SIZE_EMOTION = 58
 WRAP_WIDTH     = 900
 FRAME_W        = 1080
 FRAME_H        = 1920
-LETTER_SPACING = -2                # tighter tracking (was -1)
+LETTER_SPACING = -1                # tighter tracking (Roboto Light, -1px)
 
-Y_HOOK    = 0.08
+# Hook y_frac is randomised per video (0.30-0.50) — no fixed constant
 Y_BENEFIT = 0.40
 Y_CTA     = 0.72
 
-PILL_PAD_X  = 36
-PILL_PAD_Y  = 20
-PILL_RADIUS = 30
-STROKE_W    = 4
-
-ALPHA_HOOK = 230
-ALPHA_CTA  = 210
+STROKE_W  = 5                      # bold black stroke to compensate light font weight
 
 # Reusable dummy draw for text measurement (no allocation per call)
 _DUMMY_DRAW = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
@@ -203,18 +193,20 @@ def _apply(clip, rgba: np.ndarray):
 
 # ── render_*_rgba — return only the RGBA array (no clip wrapping) ─────────────
 
-def render_hook_rgba(hook_text: str) -> "np.ndarray | None":
-    """White pill, black text — top of frame (8%). Returns RGBA array or None."""
+def render_hook_rgba(hook_text: str, y_frac: float = 0.40) -> "np.ndarray | None":
+    """White text + bold black stroke, no background — hook position is variable (0.30-0.50).
+    y_frac: randomised per video by the assembler (seed variation+13).
+    Returns RGBA array or None."""
     if not hook_text:
         return None
     try:
         font = _load_font()
         lines = _wrap_text(hook_text, font)
-        return _render_pill(
+        return _render_stroke_text(
             lines, font,
-            text_color=(0, 0, 0, 255),
-            bg_color=(255, 255, 255, ALPHA_HOOK),
-            y_frac=Y_HOOK,
+            text_color=(255, 255, 255, 255),
+            stroke_color=(0, 0, 0, 255),
+            y_frac=y_frac,
         )
     except Exception as e:
         console.print(f"  [yellow]Hook render failed: {e}[/yellow]")
@@ -263,16 +255,17 @@ def render_emotion_rgba(emotion_text: str) -> "np.ndarray | None":
 
 
 def render_cta_rgba(cta_text: str) -> "np.ndarray | None":
-    """Black pill, white text — center-bottom (72%). Returns RGBA array or None."""
+    """White text + bold black stroke, no background — center-bottom (72%).
+    Returns RGBA array or None."""
     if not cta_text:
         return None
     try:
         font = _load_font()
         lines = _wrap_text(cta_text, font)
-        return _render_pill(
+        return _render_stroke_text(
             lines, font,
             text_color=(255, 255, 255, 255),
-            bg_color=(0, 0, 0, ALPHA_CTA),
+            stroke_color=(0, 0, 0, 255),
             y_frac=Y_CTA,
         )
     except Exception as e:
@@ -282,9 +275,9 @@ def render_cta_rgba(cta_text: str) -> "np.ndarray | None":
 
 # ── legacy clip-level wrappers (kept for compatibility) ───────────────────────
 
-def add_hook_overlay(clip, hook_text: str):
-    """White pill, black text — first clip, top of frame."""
-    rgba = render_hook_rgba(hook_text)
+def add_hook_overlay(clip, hook_text: str, y_frac: float = 0.40):
+    """White stroke text — first clip, variable position (0.30-0.50)."""
+    rgba = render_hook_rgba(hook_text, y_frac=y_frac)
     return _apply(clip, rgba) if rgba is not None else clip
 
 
