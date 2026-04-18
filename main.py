@@ -1,25 +1,31 @@
 """
-reels-factory -- Main entry point (interactive)
+reels-factory — Main entry point
 
-Two modes:
-  extract   Analyze raw videos, cut clips, classify, subtitle-check
-  generate  Use existing clips to produce N final videos (script + assembly)
+Modes: extract | reclassify | generate
 
-Usage:
-  python main.py                    # fully interactive
-  python main.py --mode extract
-  python main.py --mode generate
-  python main.py --mode extract  --skip-voice
-  python main.py --mode generate --skip-script --count 5
+Interactive (default):
+  python main.py
 
-Output: D:/Products Reels/[keyword]/output/[YYYYMMDD_HHMMSS]/final.mp4
-                                                             post_metadata.json
+Non-interactive examples:
+  python main.py --extract  --product "hanging fan"  --no-resume --skip-voice
+  python main.py --generate --product "hanging fan"  --nvideos 12 --format random
+  python main.py --generate --product "hanging fan"  --nvideos 6 --parallel 3
+  python main.py --generate --product "hanging fan"  --cta-type trigger --cta-trigger INFO
+  python main.py --reclassify --keyword "wireless earbuds"
+
+Pipeline (queue with |):
+  python main.py --extract --product "fan" --no-resume && python main.py --generate --product "fan" --nvideos 10 --parallel 3
+
+Output: D:/Products Reels/[keyword]/output/[YYYYMMDD_HHMMSS_NN]/final.mp4
+                                                                  post_metadata.json
 """
 import argparse
+import concurrent.futures
 import json
 import random
 import re
 import subprocess
+import threading
 import time
 from pathlib import Path
 from datetime import datetime
@@ -68,8 +74,15 @@ def _clean_text(text: str) -> str:
 # Interactive helpers
 # ---------------------------------------------------------------------------
 
-def pick_keyword() -> str:
-    """Scan SSD_BASE for folders and let the user choose one."""
+def pick_keyword(args=None) -> str:
+    """Scan SSD_BASE for folders and let the user choose one.
+    If args.keyword or args.product is supplied, bypass interactive picker.
+    """
+    # Non-interactive bypass
+    kw_arg = getattr(args, "keyword", None) or getattr(args, "product", None)
+    if kw_arg:
+        return kw_arg.strip()
+
     if not SSD_BASE.exists():
         console.print(f"[red]SSD not found: {SSD_BASE}[/red]")
         console.print("Check that the drive is connected and SSD_DRIVE is correct in .env")
@@ -361,6 +374,9 @@ def mode_extract(keyword: str, args) -> list[str]:
     # ── Voice separation — opt-in, default OFF (Demucs: 2-5 min/video on CPU) ──
     if args.skip_voice:
         run_voice_sep = False
+    elif getattr(args, "voice", False):
+        run_voice_sep = True
+        console.print("  Voice separation: [green]enabled[/green]  [dim](--voice)[/dim]")
     else:
         run_voice_sep = Prompt.ask(
             "Separate voice from clips?  [dim](Demucs \u2014 removes competitor voice, keeps ambient sounds \u2014 2-5 min/video)[/dim]",
@@ -382,15 +398,28 @@ def mode_extract(keyword: str, args) -> list[str]:
         try:
             prev = json.loads(progress_file.read_text(encoding="utf-8"))
             done_count = len(prev.get("processed", []))
-            resume = Prompt.ask(
-                f"  Previous run found — {done_count}/{prev.get('total', '?')} video(s) done. Resume?",
-                choices=["y", "n"],
-                default="y",
-            ) == "y"
-            if resume:
-                skip_names = set(prev.get("processed", []))
-            else:
+            # Non-interactive resume flags: --resume / --no-resume
+            if getattr(args, "no_resume", False):
+                resume = False
                 progress_file.unlink(missing_ok=True)
+                console.print(f"  [dim]Previous run discarded (--no-resume)[/dim]")
+            elif getattr(args, "resume", False):
+                resume = True
+                skip_names = set(prev.get("processed", []))
+                console.print(
+                    f"  Resuming previous run — [green]{done_count}[/green]/"
+                    f"{prev.get('total', '?')} video(s) already done  [dim](--resume)[/dim]"
+                )
+            else:
+                resume = Prompt.ask(
+                    f"  Previous run found — {done_count}/{prev.get('total', '?')} video(s) done. Resume?",
+                    choices=["y", "n"],
+                    default="y",
+                ) == "y"
+                if resume:
+                    skip_names = set(prev.get("processed", []))
+                else:
+                    progress_file.unlink(missing_ok=True)
         except Exception:
             progress_file.unlink(missing_ok=True)
 
@@ -442,13 +471,28 @@ _GENERIC_CTAS = [
 ]
 
 
-def _pick_cta() -> "str | None":
+def _pick_cta(args=None) -> "str | None":
     """
-    Interactive CTA picker.
+    Interactive CTA picker (or non-interactive via args).
     Returns:
       str  — fixed CTA text used for every video (comment trigger)
       None — generic mode: a random CTA from _GENERIC_CTAS is picked per video
+
+    Non-interactive:
+      --cta-type trigger [--cta-trigger WORD]  → comment trigger
+      --cta-type generic                        → randomized per video
     """
+    cta_type_arg = getattr(args, "cta_type", None)
+    if cta_type_arg:
+        if cta_type_arg == "trigger":
+            trigger = (getattr(args, "cta_trigger", None) or "INFO").upper().strip()
+            cta_text = f"Comment \u2018{trigger}\u2019 below \U0001f447"
+            console.print(f"  CTA: [green]{cta_text}[/green]  [dim](from --cta-type trigger)[/dim]\n")
+            return cta_text
+        # generic
+        console.print("  CTA: [dim]randomizzata per ogni video (--cta-type generic)[/dim]\n")
+        return None
+
     from rich.table import Table as _Table
 
     type_tbl = _Table(show_header=False, box=None, padding=(0, 2))
@@ -476,12 +520,32 @@ def _pick_cta() -> "str | None":
     return None
 
 
-def _pick_format() -> "tuple[str, str | None]":
+def _pick_format(args=None) -> "tuple[str, str | None]":
     """
-    Interactive picker for video format.
+    Interactive picker for video format (or non-interactive via args).
     Returns (format_name, base_format | None).
     base_format is set only for 'hook_transition'.
+
+    Non-interactive:
+      --format random|benefits|emotion|hook_transition|plot_twist
+      --format-base benefits|emotion   (only for hook_transition)
     """
+    _VALID_FMTS = {"random", "benefits", "emotion", "hook_transition", "plot_twist"}
+    fmt_arg = getattr(args, "format", None)
+    if fmt_arg:
+        fmt = fmt_arg.lower().replace("-", "_")
+        if fmt not in _VALID_FMTS:
+            console.print(f"  [yellow]Unknown --format '{fmt_arg}' — defaulting to random[/yellow]")
+            fmt = "random"
+        base_format = None
+        if fmt == "hook_transition":
+            fb = getattr(args, "format_base", None)
+            base_format = fb if fb in ("benefits", "emotion") else "benefits"
+        console.print(f"  Format: [magenta]{fmt}[/magenta]" + (
+            f"  [dim](base: {base_format})[/dim]" if base_format else ""
+        ) + "  [dim](from --format)[/dim]\n")
+        return fmt, base_format
+
     from rich.table import Table as _Table
 
     fmt_tbl = _Table(show_header=False, box=None, padding=(0, 2))
@@ -516,8 +580,85 @@ def _pick_format() -> "tuple[str, str | None]":
     return fmt, base_format
 
 
+def _assemble_one(
+    keyword: str,
+    job: dict,
+    history: "AssetHistory | None",
+) -> "tuple[dict, Path | None, float]":
+    """
+    Run the assembly step for a single video job.
+    Returns (job, output_path, elapsed_seconds).
+    history=None is used when running in a worker thread (parallel mode).
+    """
+    _t0 = time.time()
+    asm_kwargs = dict(
+        voice_path=None,
+        variation=job["i"],
+        target_duration=job["target_dur"],
+        script=job["script"],
+        history=history,
+    )
+    fmt = job["actual_fmt"]
+    clip_paths = job["clip_paths"]
+    base = job["actual_base"]
+
+    if fmt == "benefits":
+        out = assemble_benefits(keyword, clip_paths, **asm_kwargs)
+    elif fmt == "emotion":
+        out = assemble_emotion(keyword, clip_paths, **asm_kwargs)
+    elif fmt == "hook_transition":
+        out = assemble_hook_transition(keyword, clip_paths,
+                                       base_format=base or "benefits", **asm_kwargs)
+    elif fmt == "plot_twist":
+        out = assemble_plot_twist(keyword, clip_paths, **asm_kwargs)
+    else:
+        out = assemble_benefits(keyword, clip_paths, **asm_kwargs)
+
+    return job, out, time.time() - _t0
+
+
+def _update_history_and_meta(
+    job: dict,
+    output_path: Path,
+    history: "AssetHistory",
+    history_lock: "threading.Lock",
+) -> None:
+    """Record text assets + write post_metadata.json. Thread-safe via lock."""
+    script = job["script"]
+    with history_lock:
+        if script.get("caption"):
+            history.add("caption", script["caption"])
+        for field in ["hook", "problem", "solution", "proof",
+                      "emotion", "plot_hook", "plot_reveal"]:
+            if script.get(field):
+                history.add(f"{field}_text", script[field])
+        history.save()
+
+    metadata = {
+        "keyword":         job["keyword"],
+        "video_index":     job["i"] + 1,
+        "format":          job["actual_fmt"],
+        "base_format":     job["actual_base"],
+        "target_duration": job["target_dur"],
+        "created_at":      datetime.now().strftime("%Y%m%d_%H%M%S"),
+        "script":          script,
+        "clips_used":      [str(p) for p in job["clip_paths"]],
+        "output":          str(output_path),
+        "post_caption":    script.get("caption", ""),
+    }
+    meta_path = output_path.parent / "post_metadata.json"
+    meta_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
 def mode_generate(keyword: str, args) -> None:
-    """Generate N final videos from existing clips."""
+    """Generate N final videos from existing clips.
+
+    Parallel mode (--parallel N):
+      Script generation is always sequential (API calls).
+      Assembly is dispatched to N worker threads simultaneously.
+      Each worker gets history=None; the main thread records history after
+      each future completes (thread-safe via Lock).
+    """
     total_clips = show_clips_summary(keyword)
 
     if total_clips == 0:
@@ -525,41 +666,50 @@ def mode_generate(keyword: str, args) -> None:
         raise SystemExit(1)
 
     # How many videos?
-    if args.count:
-        n_videos = args.count
+    n_videos_arg = getattr(args, "nvideos", None) or getattr(args, "count", None)
+    if n_videos_arg:
+        n_videos = n_videos_arg
     else:
         n_videos = IntPrompt.ask("How many videos to generate?", default=3)
+    n_videos = max(1, min(n_videos, 50))  # clamp 1-50
 
-    n_videos = max(1, min(n_videos, 20))  # clamp 1-20
+    # Parallel workers
+    parallel = max(1, min(getattr(args, "parallel", 1) or 1, 4, n_videos))
 
-    # Format — ask once, applied to every video in this batch
-    fmt, base_format = _pick_format()
-
-    # CTA — ask once, applied to every video in this batch
-    cta_override = _pick_cta()
+    # Format & CTA — bypass interactive if flags supplied
+    fmt, base_format = _pick_format(args)
+    cta_override = _pick_cta(args)
 
     fmt_label = fmt if base_format is None else f"{fmt} ({base_format})"
-    console.print(f"\n[bold]Generating {n_videos} video(s) for [cyan]{keyword}[/cyan]  [dim]— {fmt_label}[/dim]...[/bold]\n")
+    parallel_label = f"  [dim]parallel: {parallel} workers[/dim]" if parallel > 1 else ""
+    console.print(
+        f"\n[bold]Generating {n_videos} video(s) for [cyan]{keyword}[/cyan]  "
+        f"[dim]— {fmt_label}[/dim][/bold]{parallel_label}\n"
+    )
 
     transcripts = load_existing_transcripts(keyword)
     er_refs = load_er_references(keyword)
     if er_refs:
         console.print(f"  [dim]Using {len(er_refs)} high-ER caption reference(s) as inspiration[/dim]\n")
 
-    # Asset history — loaded once per batch, saved after each video
+    # Asset history — loaded once per batch
     paths = get_keyword_paths(keyword)
     history = AssetHistory(paths["base"])
     history.load()
+    history_lock = threading.Lock()
 
-    generated: list[Path] = []
+    _FORMATS_POOL = ["benefits", "emotion", "hook_transition", "plot_twist"]
+    _OVERLAY_FIELDS = ["hook", "problem", "solution", "proof",
+                       "emotion", "plot_hook", "plot_reveal"]
 
+    # ── Phase 1: Script generation (always sequential) ────────────────────────
+    jobs: list[dict] = []
     for i in range(n_videos):
         console.print(Panel.fit(
-            f"[bold cyan]Video {i + 1} / {n_videos}[/bold cyan]",
+            f"[bold cyan]Script {i + 1} / {n_videos}[/bold cyan]",
             border_style="cyan",
         ))
 
-        # New script for each video
         script: dict = {}
         if not args.skip_script and ANTHROPIC_API_KEY:
             persona = identify_persona(keyword, transcripts)
@@ -570,33 +720,23 @@ def mode_generate(keyword: str, args) -> None:
                 er_references=er_refs,
             )
             if script:
-                # Clean overlay fields — remove special chars for human-like text
-                _OVERLAY_FIELDS = ["hook", "problem", "solution", "proof",
-                                   "emotion", "plot_hook", "plot_reveal"]
                 for field in _OVERLAY_FIELDS:
                     if script.get(field):
                         script[field] = _clean_text(script[field])
                 console.print(f"  [green]Script generated[/green]")
                 console.print(f"  [bold]Hook:[/bold] {script.get('hook', '')}")
 
-        # Override CTA: fixed string (comment trigger) or random generic per video
         script["cta"] = cta_override if cta_override is not None else random.choice(_GENERIC_CTAS)
 
-        # Random target duration between 15 and 45 seconds
         target_dur = random.randint(15, 45)
         console.print(f"  Target duration: [yellow]{target_dur}s[/yellow]")
 
-        # Different clips each iteration
         clip_paths = select_clips(keyword, variation=i, target_duration=target_dur)
         if not clip_paths:
             console.print("  [red]Not enough clips for this variation — skipping[/red]")
             continue
 
-        # Resolve random format per-video
-        _FORMATS_POOL = ["benefits", "emotion", "hook_transition", "plot_twist"]
-        actual_fmt = (
-            random.choice(_FORMATS_POOL) if fmt == "random" else fmt
-        )
+        actual_fmt = random.choice(_FORMATS_POOL) if fmt == "random" else fmt
         actual_base = (
             random.choice(["benefits", "emotion"])
             if actual_fmt == "hook_transition" and base_format is None
@@ -607,65 +747,78 @@ def mode_generate(keyword: str, args) -> None:
                 f" [dim]({actual_base})[/dim]" if actual_base else ""
             ))
 
-        asm_kwargs = dict(
-            voice_path=None, variation=i,
-            target_duration=target_dur, script=script,
-            history=history,
-        )
-        _video_t0 = time.time()
-        if actual_fmt == "benefits":
-            output_path = assemble_benefits(keyword, clip_paths, **asm_kwargs)
-        elif actual_fmt == "emotion":
-            output_path = assemble_emotion(keyword, clip_paths, **asm_kwargs)
-        elif actual_fmt == "hook_transition":
-            output_path = assemble_hook_transition(
-                keyword, clip_paths,
-                base_format=actual_base or "benefits",
-                **asm_kwargs,
-            )
-        elif actual_fmt == "plot_twist":
-            output_path = assemble_plot_twist(keyword, clip_paths, **asm_kwargs)
-        else:
-            output_path = assemble_benefits(keyword, clip_paths, **asm_kwargs)
+        jobs.append(dict(
+            i=i, keyword=keyword, script=script,
+            clip_paths=clip_paths, actual_fmt=actual_fmt,
+            actual_base=actual_base, target_dur=target_dur,
+        ))
 
-        _elapsed = time.time() - _video_t0
-        _mins, _secs = divmod(int(_elapsed), 60)
-        console.print(f"  [dim]\u23f1  Tempo: {_mins}m {_secs:02d}s[/dim]")
+    if not jobs:
+        console.print("[red]No jobs to assemble.[/red]")
+        return
 
-        if output_path:
-            # Record text assets in history to avoid repetition in next videos
-            if script.get("caption"):
-                history.add("caption", script["caption"])
-            for field in ["hook", "problem", "solution", "proof",
-                          "emotion", "plot_hook", "plot_reveal"]:
-                if script.get(field):
-                    history.add(f"{field}_text", script[field])
-            history.save()  # persist after every video
+    # ── Phase 2: Assembly ─────────────────────────────────────────────────────
+    console.print(f"\n[bold]Assembling {len(jobs)} video(s)...[/bold]\n")
+    generated: list[Path] = []
 
-            metadata = {
-                "keyword":         keyword,
-                "video_index":     i + 1,
-                "format":          actual_fmt,
-                "base_format":     actual_base,
-                "target_duration": target_dur,
-                "created_at":      datetime.now().strftime("%Y%m%d_%H%M%S"),
-                "script":          script,
-                "clips_used":      [str(p) for p in clip_paths],
-                "output":          str(output_path),
-                "post_caption":    script.get("caption", ""),
+    if parallel <= 1:
+        # Sequential — history is passed directly, updated after each video
+        for job in jobs:
+            _t0 = time.time()
+            _, output_path, elapsed = _assemble_one(keyword, job, history)
+            _mins, _secs = divmod(int(elapsed), 60)
+            console.print(f"  [dim]\u23f1  Tempo: {_mins}m {_secs:02d}s[/dim]")
+
+            if output_path:
+                _update_history_and_meta(job, output_path, history, history_lock)
+                generated.append(output_path)
+                console.print(
+                    f"  [green]\u2713 Video {job['i'] + 1}[/green]  "
+                    f"[dim]{output_path.parent.name}[/dim]"
+                )
+    else:
+        # Parallel — workers get history=None; main thread updates history
+        # via lock as futures complete
+        with concurrent.futures.ThreadPoolExecutor(max_workers=parallel) as executor:
+            future_to_job = {
+                executor.submit(_assemble_one, keyword, job, None): job
+                for job in jobs
             }
-            meta_path = output_path.parent / "post_metadata.json"
-            meta_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
-            generated.append(output_path)
+            for future in concurrent.futures.as_completed(future_to_job):
+                try:
+                    job, output_path, elapsed = future.result()
+                except Exception as exc:
+                    job = future_to_job[future]
+                    console.print(
+                        f"  [red]Video {job['i'] + 1} failed: {exc}[/red]"
+                    )
+                    continue
 
-    # Summary
+                _mins, _secs = divmod(int(elapsed), 60)
+                if output_path:
+                    _update_history_and_meta(job, output_path, history, history_lock)
+                    generated.append(output_path)
+                    console.print(
+                        f"  [green]\u2713 Video {job['i'] + 1}[/green]  "
+                        f"[dim]{job['actual_fmt']}  {_mins}m {_secs:02d}s  "
+                        f"{output_path.parent.name}[/dim]"
+                    )
+                else:
+                    console.print(
+                        f"  [yellow]\u2717 Video {job['i'] + 1} — assembly returned None  "
+                        f"[dim]{_mins}m {_secs:02d}s[/dim][/yellow]"
+                    )
+
+    # ── Summary ───────────────────────────────────────────────────────────────
     console.print()
     if generated:
         table = Table(title="Generated videos", show_header=True, header_style="bold green")
         table.add_column("#", style="dim", width=4)
         table.add_column("File")
         table.add_column("Folder")
-        for idx, p in enumerate(generated, 1):
+        for idx, p in enumerate(
+            sorted(generated, key=lambda p: p.parent.name), 1
+        ):
             table.add_row(str(idx), p.name, str(p.parent))
         console.print(table)
         console.print(f"\n[green]{len(generated)} video(s) saved in {SSD_BASE / keyword / 'output'}[/green]")
@@ -754,28 +907,94 @@ def pick_mode(forced: str | None) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="reels-factory -- Automated product video creator"
+        description="reels-factory — Automated product video creator",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples (non-interactive):
+  python main.py --extract  --product "hanging fan"  --no-resume --skip-voice
+  python main.py --generate --product "hanging fan"  --nvideos 12 --format random --cta-type generic
+  python main.py --generate --product "hanging fan"  --nvideos 6  --format benefits --parallel 3
+  python main.py --generate --product "hanging fan"  --nvideos 4  --cta-type trigger --cta-trigger INFO
+  python main.py --reclassify --keyword "wireless earbuds"
+
+Pipeline (queue multiple runs):
+  python main.py --extract --product "fan" --no-resume && python main.py --generate --product "fan" --nvideos 10 --parallel 3
+        """,
     )
-    parser.add_argument(
+
+    # ── Mode shortcuts (mutually exclusive with --mode) ───────────────────────
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--mode", choices=["extract", "reclassify", "generate"], default=None,
-        help="extract | reclassify | generate",
+        help="Mode selector (long form)",
     )
-    # Extract flags
+    mode_group.add_argument("--extract",    dest="mode", action="store_const", const="extract",
+                            help="Shortcut: run extract mode")
+    mode_group.add_argument("--generate",   dest="mode", action="store_const", const="generate",
+                            help="Shortcut: run generate mode")
+    mode_group.add_argument("--reclassify", dest="mode", action="store_const", const="reclassify",
+                            help="Shortcut: run reclassify mode")
+
+    # ── Keyword / product (bypass interactive picker) ─────────────────────────
+    parser.add_argument("--keyword",  type=str, default=None,
+                        help="Keyword / product folder name (skips interactive picker)")
+    parser.add_argument("--product",  type=str, default=None,
+                        help="Alias for --keyword")
+
+    # ── Extract flags ─────────────────────────────────────────────────────────
+    parser.add_argument("--voice",                action="store_true",
+                        help="[extract] Enable Demucs voice separation without prompting")
     parser.add_argument("--skip-voice",           action="store_true",
                         help="[extract] Skip Demucs voice separation")
     parser.add_argument("--skip-subtitle-check",  action="store_true",
                         help="[extract] Skip Claude Vision subtitle/text check")
-    # Generate flags
-    parser.add_argument("--skip-script",  action="store_true",
+    parser.add_argument("--resume",    action="store_true", default=False,
+                        help="[extract] Always resume previous run without prompting")
+    parser.add_argument("--no-resume", action="store_true", default=False,
+                        help="[extract] Discard previous run checkpoint and start fresh")
+
+    # ── Generate flags ────────────────────────────────────────────────────────
+    parser.add_argument("--skip-script", action="store_true",
                         help="[generate] Skip script generation")
-    parser.add_argument("--count", type=int, default=None,
-                        help="[generate] Number of videos to generate (skips interactive prompt)")
+    parser.add_argument("--count",   type=int, default=None,
+                        help="[generate] Number of videos (alias: --nvideos)")
+    parser.add_argument("--nvideos", type=int, default=None,
+                        help="[generate] Number of videos to generate")
+    parser.add_argument(
+        "--format", type=str, default=None,
+        metavar="FORMAT",
+        help="[generate] Video format: random | benefits | emotion | hook_transition | plot_twist",
+    )
+    parser.add_argument(
+        "--format-base", type=str, default=None,
+        dest="format_base",
+        metavar="BASE",
+        help="[generate] Base format for hook_transition: benefits | emotion  (default: benefits)",
+    )
+    parser.add_argument(
+        "--cta-type", type=str, default=None,
+        dest="cta_type",
+        choices=["trigger", "generic"],
+        help="[generate] CTA type: trigger | generic",
+    )
+    parser.add_argument(
+        "--cta-trigger", type=str, default=None,
+        dest="cta_trigger",
+        metavar="WORD",
+        help="[generate] Trigger word for --cta-type trigger  (default: INFO)",
+    )
+    parser.add_argument(
+        "--parallel", type=int, default=1,
+        metavar="N",
+        help="[generate] Number of parallel assembly workers (1-4, default: 1)",
+    )
+
     args = parser.parse_args()
 
     console.print(Panel.fit("[bold blue]reels-factory[/bold blue]", border_style="blue"))
 
     mode    = pick_mode(args.mode)
-    keyword = pick_keyword()
+    keyword = pick_keyword(args)
 
     console.print(Panel.fit(
         f"[bold blue]reels-factory[/bold blue]\n"
