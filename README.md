@@ -35,7 +35,7 @@ Takes competitor videos, extracts clips, generates AI scripts, assembles 9:16 fi
 | Pillow | 10 + | text overlays |
 | faster-whisper | latest | transcription, no torch needed |
 | Demucs | latest | voice separation (CPU, 2-5 min/video) |
-| Roboto Light font | — | install from Google Fonts → `C:\Windows\Fonts\Roboto-Light.ttf` |
+| TikTok Sans Bold font | OFL-1.1 | install from [Google Fonts](https://fonts.google.com/specimen/TikTok+Sans) → `C:\Windows\Fonts\TikTokSans-Bold.ttf` |
 
 ```powershell
 pip install -r requirements.txt
@@ -48,7 +48,7 @@ pip install -r requirements.txt
 1. **Copy `.env.example` → `.env`** and fill in your values (see [Configuration](#configuration-env)).
 2. **Connect your SSD** — all assets live under `D:\Products Reels\` (configurable).
 3. **Drop royalty-free MP3s** in the music folder (`D:\Music for Shorts\` by default).
-4. **Install Roboto Light** — download from [fonts.google.com/specimen/Roboto](https://fonts.google.com/specimen/Roboto), install system-wide.
+4. **Install TikTok Sans Bold** — download from [fonts.google.com/specimen/TikTok+Sans](https://fonts.google.com/specimen/TikTok+Sans) (tasto "Download family") oppure da [github.com/tiktok/TikTokSans/releases](https://github.com/tiktok/TikTokSans/releases). Installa `TikTokSans-Bold.ttf` (e opzionalmente `TikTokSans-Black.ttf`) in `C:\Windows\Fonts\`. Licenza OFL-1.1 — uso libero. Se il font non è installato, il fallback automatico è Roboto Light → Impact → Segoe UI Bold.
 5. Run `python main.py --help` to verify the setup.
 
 ---
@@ -102,7 +102,7 @@ raw/*.mp4
        ├─ Script generation (Claude API) → HOOK · PROBLEM · SOLUTION · PROOF · CTA · CAPTION
        ├─ Clip selection (seeded, anti-repetition)
        ├─ Assembly (MoviePy + FFmpeg)
-       │   ├─ Text overlays — Roboto Light, white + black stroke
+       │   ├─ Text overlays — TikTok Sans Bold, white + black stroke
        │   ├─ Background music (royalty-free MP3, seeded rotation)
        │   └─ HD filter (FFmpeg unsharp + contrast boost)
        └─ output/<datetime_NN>/final.mp4  +  post_metadata.json
@@ -380,7 +380,8 @@ python main.py --generate --product "fan" --nvideos 8 --parallel 4
 | **Hook Transition** | intro clip → Benefits or Emotion layout | as above for chosen base |
 | **Plot Twist** | creator clip (3 s) → product clips | PLOT_HOOK during creator · PLOT_REVEAL after |
 
-All overlay text: **Roboto Light**, white fill, 5px black stroke, no background pill.  
+All overlay text: **TikTok Sans Bold**, white fill, 3px black stroke, no background pill.  
+Font fallback chain: TikTok Sans Bold → TikTok Sans Black → Roboto Light → Impact → Segoe UI Bold → Arial Bold → PIL default.  
 Hook Y position: randomised per video between **30 % – 50 %** of frame height (seed `variation + 13`).
 
 ---

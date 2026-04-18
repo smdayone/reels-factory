@@ -2,10 +2,11 @@
 Text overlay builder for TikTok/Reels-style text on video clips.
 Uses Pillow — no ImageMagick required.
 
-All overlay types use white text + bold black stroke, NO pill backgrounds.
+All overlay types use white text + black stroke, NO pill backgrounds.
 
-Font: Roboto Light (user installs) → Segoe UI Light → Segoe UI Bold → Arial Bold → PIL default
-Letter spacing: LETTER_SPACING pixels between characters (negative = tighter)
+Font: TikTok Sans Bold (OFL-1.1 — install from fonts.google.com/specimen/TikTok+Sans)
+      → TikTok Sans Black → Roboto Light → Impact → Segoe UI Bold → Arial Bold → PIL default
+Letter spacing: LETTER_SPACING pixels between characters (0 = native tracking for Bold)
 
 Public API:
   render_hook_rgba(text, y_frac)    -> np.ndarray | None   (RGBA canvas, y_frac 0.30-0.50)
@@ -23,10 +24,14 @@ console = Console()
 
 # ── layout constants ─────────────────────────────────────────────────────────
 _FONT_CANDIDATES = [
-    Path(r"C:\Windows\Fonts\Roboto-Light.ttf"),    # Roboto Light — primary (user installs)
+    Path(r"C:\Windows\Fonts\TikTokSans-Bold.ttf"),          # TikTok Sans Bold — primary (OFL-1.1)
+    Path(r"C:\Users\Windows20\AppData\Local\Microsoft\Windows\Fonts\TikTokSans-Bold.ttf"),
+    Path(r"C:\Windows\Fonts\TikTokSans-Black.ttf"),          # TikTok Sans Black — heavier fallback
+    Path(r"C:\Users\Windows20\AppData\Local\Microsoft\Windows\Fonts\TikTokSans-Black.ttf"),
+    Path(r"C:\Windows\Fonts\Roboto-Light.ttf"),              # Roboto Light — previous primary
     Path(r"C:\Users\Windows20\AppData\Local\Microsoft\Windows\Fonts\Roboto-Light.ttf"),
-    Path(r"C:\Windows\Fonts\segoeuil.ttf"),        # Segoe UI Light — similar light fallback
-    Path(r"C:\Windows\Fonts\segoeuib.ttf"),        # Segoe UI Bold — last resort
+    Path(r"C:\Windows\Fonts\impact.ttf"),                    # Windows built-in bold fallback
+    Path(r"C:\Windows\Fonts\segoeuib.ttf"),                  # Segoe UI Bold
     Path(r"C:\Windows\Fonts\arialbd.ttf"),
 ]
 
@@ -35,13 +40,13 @@ FONT_SIZE_EMOTION = 58
 WRAP_WIDTH     = 900
 FRAME_W        = 1080
 FRAME_H        = 1920
-LETTER_SPACING = -1                # tighter tracking (Roboto Light, -1px)
+LETTER_SPACING = 0                 # TikTok Sans Bold — native tracking, no adjustment needed
 
 # Hook y_frac is randomised per video (0.30-0.50) — no fixed constant
 Y_BENEFIT = 0.40
 Y_CTA     = 0.72
 
-STROKE_W  = 5                      # bold black stroke to compensate light font weight
+STROKE_W  = 3                      # thin outline — Bold font has its own weight, no heavy stroke needed
 
 # Reusable dummy draw for text measurement (no allocation per call)
 _DUMMY_DRAW = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
