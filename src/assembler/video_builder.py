@@ -325,9 +325,12 @@ def assemble_benefits(
         date_str   = datetime.now().strftime("%Y%m%d_%H%M%S")
         date_label = datetime.now().strftime("%Y-%m-%d")
         output_dir = paths["output"] / language / f"{date_str}_{variation:02d}"
+        output_path = output_dir / f"{date_label}_benefits_{language}.mp4"
+    else:
+        # Called internally (e.g. as product section inside hook_transition):
+        # use a stable name so the caller can find the file reliably.
+        output_path = output_dir / "final.mp4"
     output_dir.mkdir(parents=True, exist_ok=True)
-    date_label = datetime.now().strftime("%Y-%m-%d")
-    output_path = output_dir / f"{date_label}_benefits_{language}.mp4"
 
     console.print(f"  Assembling {len(clip_paths)} clips  [dim](Benefits)[/dim]")
 
@@ -458,10 +461,14 @@ def assemble_emotion(
     paths = get_keyword_paths(keyword)
     if output_dir is None:
         date_str   = datetime.now().strftime("%Y%m%d_%H%M%S")
+        date_label = datetime.now().strftime("%Y-%m-%d")
         output_dir = paths["output"] / language / f"{date_str}_{variation:02d}"
+        output_path = output_dir / f"{date_label}_emotion_{language}.mp4"
+    else:
+        # Called internally (e.g. as product section inside hook_transition):
+        # use a stable name so the caller can find the file reliably.
+        output_path = output_dir / "final.mp4"
     output_dir.mkdir(parents=True, exist_ok=True)
-    date_label  = datetime.now().strftime("%Y-%m-%d")
-    output_path = output_dir / f"{date_label}_emotion_{language}.mp4"
 
     console.print(f"  Assembling {len(clip_paths)} clips  [dim](Emotion)[/dim]")
 
