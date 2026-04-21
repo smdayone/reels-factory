@@ -15,7 +15,7 @@ from rich.console import Console
 
 console = Console()
 
-MAX_HISTORY = 5
+MAX_HISTORY = 10
 
 _ASSET_TYPES = [
     "music",

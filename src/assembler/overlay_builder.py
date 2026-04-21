@@ -46,7 +46,7 @@ LETTER_SPACING = 0                 # TikTok Sans Bold — native tracking, no ad
 Y_BENEFIT = 0.40
 Y_CTA     = 0.72
 
-STROKE_W  = 3                      # thin outline — Bold font has its own weight, no heavy stroke needed
+STROKE_W  = 6                      # bold stroke — matches native TikTok caption style
 
 # Reusable dummy draw for text measurement (no allocation per call)
 _DUMMY_DRAW = ImageDraw.Draw(Image.new("RGBA", (1, 1)))

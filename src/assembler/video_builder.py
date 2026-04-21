@@ -151,14 +151,20 @@ def select_clips(
     # If clips/ai/ is empty or missing, inventory.get("ai") returns [] and the slot is silently skipped.
     varied_order = [start_cat, "ai"] + middle + ["cta", "unclassified"]
 
-    # Build a flat ordered pool from the varied order, each category rotated
+    # Build a flat ordered pool from the varied order, each category rotated.
+    # "ai" clips are capped at 2 per video so they never dominate the mix —
+    # they serve as hook-support or CTA companion, not as the entire video.
+    _AI_MAX_CLIPS = 2
     pool: list[Path] = []
     for category in varied_order:
         clips = inventory.get(category, [])
         if not clips:
             continue
         start = variation % len(clips)
-        pool.extend(clips[start:] + clips[:start])
+        rotated = clips[start:] + clips[:start]
+        if category == "ai":
+            rotated = rotated[:_AI_MAX_CLIPS]
+        pool.extend(rotated)
 
     selected: list[Path] = []
     total = 0.0
