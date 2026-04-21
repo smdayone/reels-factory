@@ -147,7 +147,9 @@ def select_clips(
     start_cat = rng.choice(["hook", "problem", "solution"])
     middle = [c for c in ["hook", "problem", "solution", "demo", "unboxing"] if c != start_cat]
     rng.shuffle(middle)
-    varied_order = [start_cat] + middle + ["cta", "unclassified"]
+    # "ai" is high-priority — always placed right after the opening clip (matches ASSEMBLY_ORDER).
+    # If clips/ai/ is empty or missing, inventory.get("ai") returns [] and the slot is silently skipped.
+    varied_order = [start_cat, "ai"] + middle + ["cta", "unclassified"]
 
     # Build a flat ordered pool from the varied order, each category rotated
     pool: list[Path] = []
@@ -313,7 +315,7 @@ def assemble_benefits(
     paths = get_keyword_paths(keyword)
     if output_dir is None:
         date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = paths["output"] / date_str
+        output_dir = paths["output"] / f"{date_str}_{variation:02d}"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "final.mp4"
 
@@ -444,7 +446,7 @@ def assemble_emotion(
     paths = get_keyword_paths(keyword)
     if output_dir is None:
         date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = paths["output"] / date_str
+        output_dir = paths["output"] / f"{date_str}_{variation:02d}"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "final.mp4"
 
