@@ -6,6 +6,7 @@ Focus: buyer persona → pain point → product as solution.
 import re
 import httpx
 from config.settings import ANTHROPIC_API_KEY, CLAUDE_MODEL, TARGET_DURATION
+from src.utils.languages import SCRIPT_LANGUAGE_INSTRUCTION
 from rich.console import Console
 
 console = Console()
@@ -18,6 +19,7 @@ Category: {category}
 Target duration: {duration} seconds
 Buyer persona: {persona}
 Key problem identified from video analysis: {problem_summary}
+Target language: {language_instruction}
 
 Write OVERLAY TEXT for each section. These words appear burned into the video frame —
 they are NOT spoken aloud. Think bold, punchy captions — not sentences.
@@ -37,17 +39,19 @@ OVERLAY RULES (sections 1-5, 7-9):
 - Each section = 1 short line, max 8 words
 - NO punctuation of any kind — no em-dash, no comma, no period, no colon, no slash
 - NO emoji, NO special characters, NO symbols
-- NO abbreviations with symbols (write "air conditioner" not "A/C", "and" not "&")
+- NO abbreviations with symbols (write out words in full)
 - Sentence case (first word capitalised only)
-- Plain conversational English — write as you would text a friend
+- Write in the target language above — cultural adaptation, not literal translation
 - Never mention price, never say buy/purchase/shop/order
 - No superlatives without evidence
 
 CAPTION RULES (section 6):
 - 1-3 lines of engaging copy — DIFFERENT tone every video (rotate: storytelling /
   rhetorical question / bold statement / relatable confession / list of 3)
+- Write in the target language above
 - Do NOT repeat the hook verbatim
-- End with 5-8 relevant hashtags on a new line (mix niche + broad)
+- End with 5-8 relevant hashtags on a new line: mix international (English) hashtags
+  with hashtags in the target language
 - Emoji allowed, keep it natural
 - Never mention price
 
@@ -70,9 +74,11 @@ def generate_script(
     persona: dict,
     problem_summary: str,
     er_references: list[dict] | None = None,
+    language: str = "en",
 ) -> dict:
-    """Generate full video script. Returns dict with sections.
+    """Generate full video script in the requested language. Returns dict with sections.
 
+    language: ISO 639-1 code — must be a key in SUPPORTED_LANGUAGES (en, es, de, fr, it).
     er_references: list of {"caption": str, "er": float} dicts sorted by ER desc.
     Top entries are appended to the prompt as style inspiration for the CAPTION section.
     """
@@ -80,12 +86,17 @@ def generate_script(
         console.print("  [yellow]No API key — skipping script generation[/yellow]")
         return {}
 
+    lang_instruction = SCRIPT_LANGUAGE_INSTRUCTION.get(
+        language, SCRIPT_LANGUAGE_INSTRUCTION["en"]
+    )
+
     prompt = SCRIPT_PROMPT.format(
         product_name=product_name,
         category=category,
         duration=TARGET_DURATION,
         persona=f"{persona['name']} ({persona['age_range']}) — {persona['main_pain']}",
         problem_summary=problem_summary,
+        language_instruction=lang_instruction,
     )
 
     if er_references:

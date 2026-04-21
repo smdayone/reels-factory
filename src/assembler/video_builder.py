@@ -299,11 +299,13 @@ def assemble_benefits(
     script: dict = {},
     output_dir: "Path | None" = None,
     history: "AssetHistory | None" = None,
+    language: str = "en",
 ) -> "Path | None":
     """
     Assemble Benefits format: hook stroke text + benefit texts per clip + CTA stroke text.
     Hook y_frac is randomised per video (0.30–0.50, seed variation+13).
-    output_dir: if provided, write final.mp4 there instead of creating a new dated dir.
+    output_dir: if provided, use it instead of creating a new dated dir.
+    language: ISO 639-1 code — used for output subfolder and filename.
     """
     if not check_ram("video assembly"):
         return None
@@ -314,10 +316,12 @@ def assemble_benefits(
 
     paths = get_keyword_paths(keyword)
     if output_dir is None:
-        date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = paths["output"] / f"{date_str}_{variation:02d}"
+        date_str   = datetime.now().strftime("%Y%m%d_%H%M%S")
+        date_label = datetime.now().strftime("%Y-%m-%d")
+        output_dir = paths["output"] / language / f"{date_str}_{variation:02d}"
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / "final.mp4"
+    date_label = datetime.now().strftime("%Y-%m-%d")
+    output_path = output_dir / f"{date_label}_benefits_{language}.mp4"
 
     console.print(f"  Assembling {len(clip_paths)} clips  [dim](Benefits)[/dim]")
 
@@ -433,9 +437,11 @@ def assemble_emotion(
     script: dict = {},
     output_dir: "Path | None" = None,
     history: "AssetHistory | None" = None,
+    language: str = "en",
 ) -> "Path | None":
     """
     Emotion format: single centered emotional text overlay for the full video.
+    language: ISO 639-1 code — used for output subfolder and filename.
     """
     if not check_ram("video assembly"):
         return None
@@ -445,10 +451,11 @@ def assemble_emotion(
 
     paths = get_keyword_paths(keyword)
     if output_dir is None:
-        date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = paths["output"] / f"{date_str}_{variation:02d}"
+        date_str   = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = paths["output"] / language / f"{date_str}_{variation:02d}"
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / "final.mp4"
+    date_label  = datetime.now().strftime("%Y-%m-%d")
+    output_path = output_dir / f"{date_label}_emotion_{language}.mp4"
 
     console.print(f"  Assembling {len(clip_paths)} clips  [dim](Emotion)[/dim]")
 
@@ -503,10 +510,12 @@ def assemble_hook_transition(
     target_duration: float = TARGET_DURATION,
     script: dict = {},
     history: "AssetHistory | None" = None,
+    language: str = "en",
 ) -> "Path | None":
     """
     Hook Transition format: random clip from D:\\Hook Transitions (original audio)
     concatenated with a Benefits or Emotion product video.
+    language: ISO 639-1 code — used for output subfolder and filename.
     """
     if not check_ram("video assembly"):
         return None
@@ -514,13 +523,14 @@ def assemble_hook_transition(
     hook_clip_path = _get_random_video(HOOK_TRANSITIONS_DIR, variation, history, "hook_clip")
     if hook_clip_path is None:
         console.print("  [yellow]Hook Transitions folder empty — falling back to Benefits[/yellow]")
-        return assemble_benefits(keyword, clip_paths, voice_path, variation, target_duration, script, history=history)
+        return assemble_benefits(keyword, clip_paths, voice_path, variation, target_duration, script, history=history, language=language)
 
     paths = get_keyword_paths(keyword)
-    date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = paths["output"] / date_str
+    date_str   = datetime.now().strftime("%Y%m%d_%H%M%S")
+    date_label = datetime.now().strftime("%Y-%m-%d")
+    output_dir = paths["output"] / language / f"{date_str}_{variation:02d}"
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / "final.mp4"
+    output_path  = output_dir / f"{date_label}_hook_transition_{language}.mp4"
     temp_product = paths["temp"] / f"product_section_{variation}.mp4"
 
     console.print(
@@ -605,11 +615,13 @@ def assemble_plot_twist(
     target_duration: float = TARGET_DURATION,
     script: dict = {},
     history: "AssetHistory | None" = None,
+    language: str = "en",
 ) -> "Path | None":
     """
     Plot Twist format: 3×1s cuts of a creator clip + product clips.
     PLOT_HOOK text during creator section, PLOT_REVEAL text during product section.
     Audio: background music only (no original audio from any clip).
+    language: ISO 639-1 code — used for output subfolder and filename.
     """
     if not check_ram("video assembly"):
         return None
@@ -624,10 +636,11 @@ def assemble_plot_twist(
         return None
 
     paths = get_keyword_paths(keyword)
-    date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = paths["output"] / date_str
+    date_str   = datetime.now().strftime("%Y%m%d_%H%M%S")
+    date_label = datetime.now().strftime("%Y-%m-%d")
+    output_dir = paths["output"] / language / f"{date_str}_{variation:02d}"
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / "final.mp4"
+    output_path = output_dir / f"{date_label}_plot_twist_{language}.mp4"
 
     console.print(
         f"  Assembling  [dim](Plot Twist)[/dim]\n"

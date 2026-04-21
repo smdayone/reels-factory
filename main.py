@@ -54,6 +54,7 @@ from src.assembler.video_builder import (
     assemble_video,  # backwards-compat alias
 )
 from src.utils.asset_history import AssetHistory
+from src.utils.languages import SUPPORTED_LANGUAGES, GENERIC_CTAS, CTA_TRIGGER_TEMPLATE
 
 console = Console()
 
@@ -462,31 +463,23 @@ def mode_extract(keyword: str, args) -> list[str]:
 # Stage 2 — Generate
 # ---------------------------------------------------------------------------
 
-# Pool of generic CTAs — one is picked at random per video
-_GENERIC_CTAS = [
-    "Get yours \u2192 link in bio \u2b06\ufe0f",
-    "Tap the link in bio to get yours \U0001f446",
-    "Don\u2019t miss out \u2014 link in bio \U0001f517",
-    "Follow for more + link in bio \U0001f4f2",
-]
-
-
-def _pick_cta(args=None) -> "str | None":
+def _pick_cta(args=None, language: str = "en") -> "str | None":
     """
     Interactive CTA picker (or non-interactive via args).
     Returns:
       str  — fixed CTA text used for every video (comment trigger)
-      None — generic mode: a random CTA from _GENERIC_CTAS is picked per video
+      None — generic mode: a random CTA from GENERIC_CTAS[language] is picked per video
 
     Non-interactive:
-      --cta-type trigger [--cta-trigger WORD]  → comment trigger
-      --cta-type generic                        → randomized per video
+      --cta-type trigger [--cta-trigger WORD]  → comment trigger (language-aware)
+      --cta-type generic                        → randomized per video from language pool
     """
     cta_type_arg = getattr(args, "cta_type", None)
     if cta_type_arg:
         if cta_type_arg == "trigger":
             trigger = (getattr(args, "cta_trigger", None) or "INFO").upper().strip()
-            cta_text = f"Comment \u2018{trigger}\u2019 below \U0001f447"
+            template = CTA_TRIGGER_TEMPLATE.get(language, CTA_TRIGGER_TEMPLATE["en"])
+            cta_text = template.format(trigger=trigger)
             console.print(f"  CTA: [green]{cta_text}[/green]  [dim](from --cta-type trigger)[/dim]\n")
             return cta_text
         # generic
@@ -511,11 +504,12 @@ def _pick_cta(args=None) -> "str | None":
             "  Trigger  [dim](es. INFO \u00b7 FREE \u00b7 FREE GUIDE \u00b7 LINK NOW)[/dim]",
             default="INFO",
         ).upper().strip() or "INFO"
-        cta_text = f"Comment \u2018{trigger}\u2019 below \U0001f447"
+        template = CTA_TRIGGER_TEMPLATE.get(language, CTA_TRIGGER_TEMPLATE["en"])
+        cta_text = template.format(trigger=trigger)
         console.print(f"  CTA: [green]{cta_text}[/green]\n")
         return cta_text
 
-    # Generic — signal the loop to randomize per video
+    # Generic — signal the loop to randomize per video from the language pool
     console.print("  CTA: [dim]randomizzata per ogni video[/dim]\n")
     return None
 
@@ -597,6 +591,7 @@ def _assemble_one(
         target_duration=job["target_dur"],
         script=job["script"],
         history=history,
+        language=job.get("language", "en"),
     )
     fmt = job["actual_fmt"]
     clip_paths = job["clip_paths"]
@@ -636,6 +631,7 @@ def _update_history_and_meta(
 
     metadata = {
         "keyword":         job["keyword"],
+        "language":        job.get("language", "en"),
         "video_index":     job["i"] + 1,
         "format":          job["actual_fmt"],
         "base_format":     job["actual_base"],
@@ -659,6 +655,19 @@ def mode_generate(keyword: str, args) -> None:
       Each worker gets history=None; the main thread records history after
       each future completes (thread-safe via Lock).
     """
+    # ── Language validation ───────────────────────────────────────────────────
+    language = getattr(args, "language", "en") or "en"
+    language = language.lower().strip()
+    if language not in SUPPORTED_LANGUAGES:
+        console.print(
+            f"[red]Unsupported language '{language}'.[/red]  "
+            f"Supported: "
+            + "  ".join(
+                f"[cyan]{k}[/cyan] ({v})" for k, v in SUPPORTED_LANGUAGES.items()
+            )
+        )
+        raise SystemExit(1)
+
     total_clips = show_clips_summary(keyword)
 
     if total_clips == 0:
@@ -676,15 +685,17 @@ def mode_generate(keyword: str, args) -> None:
     # Parallel workers
     parallel = max(1, min(getattr(args, "parallel", 1) or 1, 4, n_videos))
 
-    # Format & CTA — bypass interactive if flags supplied
+    # Format & CTA — bypass interactive if flags supplied; CTA is language-aware
     fmt, base_format = _pick_format(args)
-    cta_override = _pick_cta(args)
+    cta_override = _pick_cta(args, language=language)
 
     fmt_label = fmt if base_format is None else f"{fmt} ({base_format})"
     parallel_label = f"  [dim]parallel: {parallel} workers[/dim]" if parallel > 1 else ""
     console.print(
         f"\n[bold]Generating {n_videos} video(s) for [cyan]{keyword}[/cyan]  "
-        f"[dim]— {fmt_label}[/dim][/bold]{parallel_label}\n"
+        f"[dim]— {fmt_label}  "
+        f"[cyan]{SUPPORTED_LANGUAGES[language]}[/cyan] ({language})[/dim][/bold]"
+        f"{parallel_label}\n"
     )
 
     transcripts = load_existing_transcripts(keyword)
@@ -718,15 +729,16 @@ def mode_generate(keyword: str, args) -> None:
                 keyword, "product",
                 persona, persona.get("main_pain", ""),
                 er_references=er_refs,
+                language=language,
             )
             if script:
                 for field in _OVERLAY_FIELDS:
                     if script.get(field):
                         script[field] = _clean_text(script[field])
-                console.print(f"  [green]Script generated[/green]")
+                console.print(f"  [green]Script generated[/green]  [dim]({SUPPORTED_LANGUAGES[language]})[/dim]")
                 console.print(f"  [bold]Hook:[/bold] {script.get('hook', '')}")
 
-        script["cta"] = cta_override if cta_override is not None else random.choice(_GENERIC_CTAS)
+        script["cta"] = cta_override if cta_override is not None else random.choice(GENERIC_CTAS[language])
 
         target_dur = random.randint(15, 45)
         console.print(f"  Target duration: [yellow]{target_dur}s[/yellow]")
@@ -751,6 +763,7 @@ def mode_generate(keyword: str, args) -> None:
             i=i, keyword=keyword, script=script,
             clip_paths=clip_paths, actual_fmt=actual_fmt,
             actual_base=actual_base, target_dur=target_dur,
+            language=language,
         ))
 
     if not jobs:
@@ -987,6 +1000,17 @@ Pipeline (queue multiple runs):
         "--parallel", type=int, default=1,
         metavar="N",
         help="[generate] Number of parallel assembly workers (1-4, default: 1)",
+    )
+    parser.add_argument(
+        "--language", "--lang",
+        type=str, default="en",
+        dest="language",
+        metavar="LANG",
+        help=(
+            "[generate] Language for all generated text "
+            f"(default: en). Supported: "
+            + ", ".join(f"{k} ({v})" for k, v in SUPPORTED_LANGUAGES.items())
+        ),
     )
 
     args = parser.parse_args()
