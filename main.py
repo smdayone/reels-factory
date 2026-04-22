@@ -725,11 +725,23 @@ def mode_generate(keyword: str, args) -> None:
         if not args.skip_script and ANTHROPIC_API_KEY:
             persona = identify_persona(keyword, transcripts)
             console.print(f"  Persona: [cyan]{persona['name']}[/cyan]")
+
+            # Collect recently used overlay texts so Claude can avoid repeating them.
+            # This covers both cross-batch repetition (from history on disk) and
+            # within-batch repetition (texts added to in-memory history below).
+            _TEXT_ASSET_TYPES = [
+                "hook_text", "problem_text", "solution_text", "proof_text",
+                "emotion_text", "plot_hook_text", "plot_reveal_text",
+            ]
+            recent_texts = {k: history.get_recent(k, n=5) for k in _TEXT_ASSET_TYPES}
+            recent_texts = {k: v for k, v in recent_texts.items() if v}  # drop empty
+
             script = generate_script(
                 keyword, "product",
                 persona, persona.get("main_pain", ""),
                 er_references=er_refs,
                 language=language,
+                recent_texts=recent_texts or None,
             )
             if script:
                 for field in _OVERLAY_FIELDS:
@@ -737,6 +749,12 @@ def mode_generate(keyword: str, args) -> None:
                         script[field] = _clean_text(script[field])
                 console.print(f"  [green]Script generated[/green]  [dim]({SUPPORTED_LANGUAGES[language]})[/dim]")
                 console.print(f"  [bold]Hook:[/bold] {script.get('hook', '')}")
+
+                # Pre-register generated texts into in-memory history so the next
+                # iteration in this batch also benefits from the AVOID REPETITION context.
+                for field in _OVERLAY_FIELDS:
+                    if script.get(field):
+                        history.add(f"{field}_text", script[field])
 
         script["cta"] = cta_override if cta_override is not None else random.choice(GENERIC_CTAS[language])
 
@@ -900,6 +918,118 @@ def mode_reclassify(keyword: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Stage 4 — Publish (git commit + push)
+# ---------------------------------------------------------------------------
+
+def mode_publish(args) -> None:
+    """
+    Commit all pending changes and push to origin/main.
+
+    Stages every file that is tracked and modified (git add -u) plus any new
+    files inside the source tree that are not excluded by .gitignore.
+    Sensitive files (.env, *.tmp, media, model weights) are already covered
+    by .gitignore and will never be staged.
+
+    Non-interactive flags:
+      --message / -m  commit message (prompted if omitted)
+      --yes    / -y   skip confirmation prompt
+    """
+    import shutil
+
+    if not shutil.which("git"):
+        console.print("[red]git not found in PATH — install git and try again.[/red]")
+        raise SystemExit(1)
+
+    # ── Show current status ───────────────────────────────────────────────────
+    status_result = subprocess.run(
+        ["git", "status", "--short"],
+        capture_output=True, text=True,
+    )
+    status_lines = [l for l in status_result.stdout.splitlines() if l.strip()]
+
+    if not status_lines:
+        console.print("[yellow]Nothing to commit — working tree is clean.[/yellow]")
+        return
+
+    console.print("\n[bold]Pending changes:[/bold]")
+    for line in status_lines:
+        flag = line[:2].strip()
+        path = line[3:]
+        if flag in ("M", "MM"):
+            color = "yellow"
+        elif flag in ("A", "??"):
+            color = "green"
+        elif flag in ("D",):
+            color = "red"
+        else:
+            color = "white"
+        console.print(f"  [{color}]{flag or '?'}[/{color}]  {path}")
+
+    # ── Commit message ────────────────────────────────────────────────────────
+    message = getattr(args, "message", None) or ""
+    message = message.strip()
+    if not message:
+        console.print()
+        message = Prompt.ask("Commit message").strip()
+    if not message:
+        console.print("[red]Commit message cannot be empty. Aborting.[/red]")
+        raise SystemExit(1)
+
+    # ── Confirmation ──────────────────────────────────────────────────────────
+    skip_confirm = getattr(args, "yes", False)
+    if not skip_confirm:
+        console.print()
+        confirm = Prompt.ask(
+            f'Commit [bold green]"{message}"[/bold green] and push to [cyan]origin/main[/cyan]?',
+            choices=["y", "n"],
+            default="y",
+        )
+        if confirm != "y":
+            console.print("[yellow]Aborted.[/yellow]")
+            return
+
+    # ── Stage ─────────────────────────────────────────────────────────────────
+    # git add -u  → modified + deleted tracked files
+    subprocess.run(["git", "add", "-u"], check=True)
+    # git add .   → new untracked files (respects .gitignore — .env, *.tmp,
+    #               media files and model weights are already excluded)
+    subprocess.run(["git", "add", "."], check=True)
+
+    # ── Commit ────────────────────────────────────────────────────────────────
+    commit_result = subprocess.run(
+        ["git", "commit", "-m", message],
+        capture_output=True, text=True,
+    )
+    if commit_result.returncode != 0:
+        # "nothing to commit" after add is not a real error
+        if "nothing to commit" in commit_result.stdout + commit_result.stderr:
+            console.print("[yellow]Nothing new to commit after staging.[/yellow]")
+            return
+        console.print(f"[red]Commit failed:[/red]\n{commit_result.stderr.strip()}")
+        raise SystemExit(1)
+
+    # Print the short commit hash from the commit output
+    commit_line = commit_result.stdout.strip().splitlines()[0] if commit_result.stdout else ""
+    console.print(f"  [green]✓ Committed[/green]  [dim]{commit_line}[/dim]")
+
+    # ── Push ──────────────────────────────────────────────────────────────────
+    console.print("  Pushing to [cyan]origin/main[/cyan]…")
+    push_result = subprocess.run(
+        ["git", "push", "origin", "main"],
+        capture_output=True, text=True,
+    )
+    if push_result.returncode != 0:
+        console.print(f"[red]Push failed:[/red]\n{push_result.stderr.strip()}")
+        raise SystemExit(1)
+
+    console.print("  [green]✓ Pushed to origin/main[/green]")
+    console.print(
+        f"\n[bold green]Published.[/bold green]  "
+        f"[dim]https://github.com/smdayone/reels-factory[/dim]"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -938,7 +1068,7 @@ Pipeline (queue multiple runs):
     # ── Mode shortcuts (mutually exclusive with --mode) ───────────────────────
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(
-        "--mode", choices=["extract", "reclassify", "generate"], default=None,
+        "--mode", choices=["extract", "reclassify", "generate", "publish"], default=None,
         help="Mode selector (long form)",
     )
     mode_group.add_argument("--extract",    dest="mode", action="store_const", const="extract",
@@ -947,6 +1077,8 @@ Pipeline (queue multiple runs):
                             help="Shortcut: run generate mode")
     mode_group.add_argument("--reclassify", dest="mode", action="store_const", const="reclassify",
                             help="Shortcut: run reclassify mode")
+    mode_group.add_argument("--publish",    dest="mode", action="store_const", const="publish",
+                            help="Shortcut: commit and push changes to GitHub")
 
     # ── Keyword / product (bypass interactive picker) ─────────────────────────
     parser.add_argument("--keyword",  type=str, default=None,
@@ -1013,11 +1145,30 @@ Pipeline (queue multiple runs):
         ),
     )
 
+    # ── Publish flags ─────────────────────────────────────────────────────────
+    parser.add_argument(
+        "--message", "-m",
+        type=str, default=None,
+        metavar="MSG",
+        help="[publish] Commit message (prompted interactively if omitted)",
+    )
+    parser.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        help="[publish] Skip confirmation prompt",
+    )
+
     args = parser.parse_args()
 
     console.print(Panel.fit("[bold blue]reels-factory[/bold blue]", border_style="blue"))
 
-    mode    = pick_mode(args.mode)
+    mode = pick_mode(args.mode)
+
+    # --publish does not need a keyword — skip the product picker entirely
+    if mode == "publish":
+        mode_publish(args)
+        return
+
     keyword = pick_keyword(args)
 
     console.print(Panel.fit(

@@ -3,25 +3,25 @@
 Automated TikTok / Instagram Reels creator for e-commerce products.  
 Takes competitor videos, extracts clips, generates AI scripts, assembles 9:16 final videos — fully non-interactive when needed.
 
+Runs on **Windows 10/11** and **macOS 12+ (Apple Silicon & Intel)**.
+
 ---
 
 ## Table of contents
 
 1. [Requirements](#requirements)
-2. [Setup](#setup)
-3. [Directory structure](#directory-structure)
-4. [Pipeline overview](#pipeline-overview)
-5. [CLI reference](#cli-reference)
-   - [Mode flags](#mode-flags)
-   - [Keyword / product](#keyword--product)
-   - [Extract flags](#extract-flags)
-   - [Generate flags](#generate-flags)
-6. [Video formats](#video-formats)
-7. [Non-interactive examples](#non-interactive-examples)
-8. [Parallel assembly](#parallel-assembly)
-9. [Asset history (anti-repetition)](#asset-history-anti-repetition)
-10. [Music setup](#music-setup)
-11. [Configuration (.env)](#configuration-env)
+2. [Setup — macOS](#setup--macos)
+3. [Setup — Windows](#setup--windows)
+4. [SSD setup — exFAT (recommended for cross-platform use)](#ssd-setup--exfat)
+5. [Directory structure](#directory-structure)
+6. [Pipeline overview](#pipeline-overview)
+7. [CLI reference](#cli-reference)
+8. [Video formats](#video-formats)
+9. [Non-interactive examples](#non-interactive-examples)
+10. [Parallel assembly](#parallel-assembly)
+11. [Asset history (anti-repetition)](#asset-history-anti-repetition)
+12. [Music setup](#music-setup)
+13. [Configuration (.env)](#configuration-env)
 
 ---
 
@@ -35,28 +35,226 @@ Takes competitor videos, extracts clips, generates AI scripts, assembles 9:16 fi
 | Pillow | 10 + | text overlays |
 | faster-whisper | latest | transcription, no torch needed |
 | Demucs | latest | voice separation (CPU, 2-5 min/video) |
-| TikTok Sans Bold font | OFL-1.1 | install from [Google Fonts](https://fonts.google.com/specimen/TikTok+Sans) → `C:\Windows\Fonts\TikTokSans-Bold.ttf` |
+| TikTok Sans Bold | OFL-1.1 | [Google Fonts](https://fonts.google.com/specimen/TikTok+Sans) or [GitHub releases](https://github.com/tiktok/TikTokSans/releases) |
 
-```powershell
+---
+
+## Setup — macOS
+
+### 1. Install Homebrew (if not already installed)
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+### 2. Install system dependencies
+
+```bash
+brew install python@3.11 ffmpeg
+```
+
+Verify:
+
+```bash
+python3 --version   # Python 3.11.x or newer
+ffmpeg -version     # any recent build
+```
+
+### 3. Clone the repo and install Python packages
+
+```bash
+git clone https://github.com/your-org/reels-factory.git
+cd reels-factory
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+> **Tip:** add `source /path/to/reels-factory/.venv/bin/activate` to your `~/.zshrc` so the
+> environment activates automatically in new terminal sessions.
+
+### 4. Install TikTok Sans Bold font
+
+Download `TikTokSans-Bold.ttf` (and optionally `TikTokSans-Black.ttf`) from
+[fonts.google.com/specimen/TikTok+Sans](https://fonts.google.com/specimen/TikTok+Sans)
+(click **Download family**) or from
+[github.com/tiktok/TikTokSans/releases](https://github.com/tiktok/TikTokSans/releases).
+
+Install the font:
+
+```bash
+# Copy to user fonts folder (no admin required)
+cp TikTokSans-Bold.ttf ~/Library/Fonts/
+cp TikTokSans-Black.ttf ~/Library/Fonts/   # optional
+```
+
+Font fallback chain if not installed: TikTok Sans Black → Roboto Light → PIL default.
+
+### 5. Configure `.env`
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and set `SSD_BASE_PATH` to wherever your product folders live:
+
+```dotenv
+# macOS — exFAT SSD mounted at /Volumes/ReelsFactory
+SSD_BASE_PATH=/Volumes/ReelsFactory/Products Reels
+MUSIC_FOLDER=/Volumes/ReelsFactory/Music for Shorts
+
+# macOS — local folder (no external SSD)
+# SSD_BASE_PATH=/Users/yourname/Products Reels
+# MUSIC_FOLDER=/Users/yourname/Music for Shorts
+```
+
+### 6. Verify
+
+```bash
+python main.py --help
 ```
 
 ---
 
-## Setup
+## Setup — Windows
 
-1. **Copy `.env.example` → `.env`** and fill in your values (see [Configuration](#configuration-env)).
-2. **Connect your SSD** — all assets live under `D:\Products Reels\` (configurable).
-3. **Drop royalty-free MP3s** in the music folder (`D:\Music for Shorts\` by default).
-4. **Install TikTok Sans Bold** — download from [fonts.google.com/specimen/TikTok+Sans](https://fonts.google.com/specimen/TikTok+Sans) (tasto "Download family") oppure da [github.com/tiktok/TikTokSans/releases](https://github.com/tiktok/TikTokSans/releases). Installa `TikTokSans-Bold.ttf` (e opzionalmente `TikTokSans-Black.ttf`) in `C:\Windows\Fonts\`. Licenza OFL-1.1 — uso libero. Se il font non è installato, il fallback automatico è Roboto Light → Impact → Segoe UI Bold.
-5. Run `python main.py --help` to verify the setup.
+### 1. Install Python 3.11+
+
+Download from [python.org/downloads](https://www.python.org/downloads/).  
+During installation, check **"Add Python to PATH"**.
+
+### 2. Install FFmpeg
+
+Download a pre-built binary from [ffmpeg.org/download.html](https://ffmpeg.org/download.html)
+(e.g. the gyan.dev build).  
+Extract and add the `bin/` folder to your system `PATH`.
+
+Verify in PowerShell:
+
+```powershell
+python --version
+ffmpeg -version
+```
+
+### 3. Clone the repo and install Python packages
+
+```powershell
+git clone https://github.com/your-org/reels-factory.git
+cd reels-factory
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+### 4. Install TikTok Sans Bold font
+
+Download `TikTokSans-Bold.ttf` from
+[fonts.google.com/specimen/TikTok+Sans](https://fonts.google.com/specimen/TikTok+Sans)
+or [github.com/tiktok/TikTokSans/releases](https://github.com/tiktok/TikTokSans/releases).
+
+Double-click the `.ttf` file → **Install for all users** (installs to `C:\Windows\Fonts\`).  
+Optionally install `TikTokSans-Black.ttf` as well.
+
+Font fallback chain if not installed: TikTok Sans Black → Roboto Light → Impact → Segoe UI Bold → Arial Bold → PIL default.
+
+### 5. Configure `.env`
+
+```powershell
+copy .env.example .env
+```
+
+Edit `.env` and set `SSD_BASE_PATH` to your products folder:
+
+```dotenv
+# Windows — exFAT or NTFS SSD on drive D:
+SSD_BASE_PATH=D:\Products Reels
+MUSIC_FOLDER=D:\Music for Shorts
+SSD_DRIVE=D
+```
+
+### 6. Verify
+
+```powershell
+python main.py --help
+```
+
+---
+
+## SSD setup — exFAT
+
+**exFAT** is the recommended format if you use the same SSD on both Windows and macOS.
+It is natively supported (read + write, no drivers needed) on both operating systems.
+
+> If you only use the SSD on one OS, skip this section.
+
+### What you need
+
+- A backup of all data currently on the SSD (reformatting erases everything).
+- ~15 minutes.
+
+---
+
+### Reformat on Windows
+
+1. Back up all data from the SSD to another drive.
+2. Open **File Explorer** → right-click the SSD → **Format…**
+3. Set **File system** to `exFAT`.
+4. Give it a label (e.g. `ReelsFactory`).
+5. Click **Start** → **OK** to confirm.
+
+After formatting, recreate your folder structure:
+
+```
+ReelsFactory\
+├── Products Reels\     ← SSD_BASE_PATH
+└── Music for Shorts\   ← MUSIC_FOLDER
+```
+
+---
+
+### Reformat on macOS
+
+1. Back up all data from the SSD.
+2. Open **Disk Utility** (Spotlight → type "Disk Utility").
+3. Select the SSD in the left sidebar (the top-level disk, not a partition).
+4. Click **Erase** in the toolbar.
+5. Set **Name** to `ReelsFactory` (or any label you prefer).
+6. Set **Format** to `ExFAT`.
+7. Set **Scheme** to `Master Boot Record` (required for Windows compatibility).
+8. Click **Erase** → **Done**.
+
+After formatting, create the folder structure:
+
+```bash
+mkdir -p "/Volumes/ReelsFactory/Products Reels"
+mkdir -p "/Volumes/ReelsFactory/Music for Shorts"
+```
+
+---
+
+### Mount the SSD on macOS after reformatting
+
+The SSD mounts automatically when plugged in. Its path will be:
+
+```
+/Volumes/ReelsFactory/
+```
+
+Set your `.env` accordingly:
+
+```dotenv
+SSD_BASE_PATH=/Volumes/ReelsFactory/Products Reels
+MUSIC_FOLDER=/Volumes/ReelsFactory/Music for Shorts
+```
+
+On Windows the SSD will continue to appear as a drive letter (e.g. `D:`), no changes needed.
 
 ---
 
 ## Directory structure
 
 ```
-D:\Products Reels\
+<SSD_BASE_PATH>/
 └── <keyword>/                    # one folder per product / niche
     ├── raw/                      # drop competitor .mp4 files here
     ├── clips/
@@ -69,9 +267,10 @@ D:\Products Reels\
     │   ├── unboxing/             # unboxing clips
     │   └── unclassified/         # clips that couldn't be auto-classified
     ├── output/
-    │   └── <YYYYMMDD_HHMMSS_NN>/ # one folder per generated video
-    │       ├── final.mp4
-    │       └── post_metadata.json
+    │   └── <lang>/
+    │       └── <YYYYMMDD_HHMMSS_NN>/
+    │           ├── <YYYY-MM-DD>_<format>_<lang>.mp4
+    │           └── post_metadata.json
     ├── transcripts/              # Whisper .txt files (auto-generated)
     ├── voice/                    # Demucs stems (no_vocals track)
     ├── temp/                     # temporary frames / files (auto-cleaned)
@@ -80,7 +279,8 @@ D:\Products Reels\
 ```
 
 > **`clips/ai/`** is never created automatically — create it manually and drop
-> AI-generated clips there. They are treated as high-priority (second only to hook clips).
+> AI-generated clips there. They are treated as high-priority (second only to hook clips),
+> with a cap of 2 AI clips per video.
 
 ---
 
@@ -100,12 +300,13 @@ raw/*.mp4
        ▼  --generate
        ├─ Persona identification
        ├─ Script generation (Claude API) → HOOK · PROBLEM · SOLUTION · PROOF · CTA · CAPTION
+       ├─ Anti-repetition context injection (recent texts → Claude prompt)
        ├─ Clip selection (seeded, anti-repetition)
        ├─ Assembly (MoviePy + FFmpeg)
        │   ├─ Text overlays — TikTok Sans Bold, white + black stroke
        │   ├─ Background music (royalty-free MP3, seeded rotation)
        │   └─ HD filter (FFmpeg unsharp + contrast boost)
-       └─ output/<datetime_NN>/final.mp4  +  post_metadata.json
+       └─ output/<lang>/<datetime_NN>/<date>_<format>_<lang>.mp4  +  post_metadata.json
 ```
 
 ---
@@ -122,252 +323,47 @@ Run with no arguments for fully interactive mode.
 
 ### Mode flags
 
-Exactly one of these selects the pipeline stage to run.  
-They are mutually exclusive with each other and with `--mode`.
-
 | Flag | Equivalent | Description |
 |---|---|---|
 | `--extract` | `--mode extract` | Analyze raw videos, cut and classify clips |
 | `--generate` | `--mode generate` | Generate final videos from existing clips |
 | `--reclassify` | `--mode reclassify` | Re-run Claude Vision on `unclassified/` clips |
-| `--mode <name>` | — | Long form: `extract` · `reclassify` · `generate` |
-
-**Examples:**
-```powershell
-python main.py --extract
-python main.py --generate
-python main.py --mode reclassify
-```
 
 ---
 
 ### Keyword / product
 
-Skip the interactive folder picker entirely.
-
 | Flag | Type | Description |
 |---|---|---|
 | `--keyword <name>` | string | Exact name of the product folder under `SSD_BASE_PATH` |
-| `--product <name>` | string | Alias for `--keyword` (same behaviour) |
-
-- If the folder doesn't exist yet, it is created automatically on first run.
-- Either flag is accepted for both `--extract` and `--generate`.
-
-**Examples:**
-```powershell
-# Use an existing keyword folder
-python main.py --generate --keyword "hanging portable fan"
-
-# --product is identical — use whichever reads more naturally
-python main.py --extract  --product "pattern handbag purse"
-
-# New keyword — folder will be created
-python main.py --extract  --product "magnetic phone holder"
-```
+| `--product <name>` | string | Alias for `--keyword` |
 
 ---
 
 ### Extract flags
 
-Used with `--extract`. Control voice separation, subtitle checking and checkpoint resume.
-
----
-
-#### `--voice`
-
-Enable Demucs voice separation **without prompting**.  
-Demucs removes the competitor's voice track while keeping ambient sounds and background music in every cut clip. Adds ~2-5 minutes per source video on CPU.
-
-```powershell
-# Non-interactive extract with voice separation enabled
-python main.py --extract --product "hanging fan" --voice
-```
-
-> Omit `--voice` and omit `--skip-voice` if you want the interactive prompt to appear.
-
----
-
-#### `--skip-voice`
-
-Skip Demucs entirely. Clips keep the original audio track of the source video.  
-Use this for a fast first pass when you just want clips quickly.
-
-```powershell
-python main.py --extract --product "hanging fan" --skip-voice
-```
-
----
-
-#### `--skip-subtitle-check`
-
-Skip the Claude Vision frame-check that discards clips with hardcoded subtitles or brand overlays.  
-Saves API cost; useful when source videos are known to be clean.
-
-```powershell
-python main.py --extract --product "hanging fan" --skip-voice --skip-subtitle-check
-```
-
----
-
-#### `--resume`
-
-If a previous extract run was interrupted, **always resume** from the checkpoint without asking.  
-Processed videos are skipped; only the remaining ones are processed.
-
-```powershell
-python main.py --extract --product "hanging fan" --resume
-```
-
----
-
-#### `--no-resume`
-
-**Discard** the checkpoint and start the extract pipeline from scratch.  
-All raw videos will be re-processed even if some were done in a previous run.
-
-```powershell
-python main.py --extract --product "hanging fan" --no-resume
-```
-
-> `--resume` and `--no-resume` are mutually exclusive. If neither is passed and a checkpoint exists, you will be asked interactively.
+| Flag | Description |
+|---|---|
+| `--voice` | Enable Demucs voice separation without prompting (~2-5 min/video on CPU) |
+| `--skip-voice` | Skip Demucs entirely — clips keep original audio |
+| `--skip-subtitle-check` | Skip Claude Vision subtitle/text check (saves API cost) |
+| `--resume` | Always resume from checkpoint without prompting |
+| `--no-resume` | Discard checkpoint and start fresh |
 
 ---
 
 ### Generate flags
 
-Used with `--generate`. Control count, format, CTA and parallelism.
-
----
-
-#### `--nvideos <N>` / `--count <N>`
-
-Number of videos to generate. Both flags are equivalent.  
-Valid range: 1 – 50.
-
-```powershell
-# Generate 12 videos
-python main.py --generate --product "hanging fan" --nvideos 12
-
-# Same with --count
-python main.py --generate --product "hanging fan" --count 5
-```
-
----
-
-#### `--format <format>`
-
-Video format applied to **every** video in the batch.  
-Without this flag, you are asked interactively.
-
-| Value | Description |
-|---|---|
-| `random` | A different format is picked at random for each video in the batch |
-| `benefits` | Hook clip → benefit texts (HOOK · PROBLEM · SOLUTION · PROOF) → CTA |
-| `emotion` | Hook clip → full-screen emotional statement → CTA |
-| `hook_transition` | Dedicated intro clip → then Benefits or Emotion (see `--format-base`) |
-| `plot_twist` | Creator clip (3 s) → plot-hook text → product reveal → plot-reveal text |
-
-```powershell
-# All 10 videos use the Benefits format
-python main.py --generate --product "fan" --nvideos 10 --format benefits
-
-# Random mix — different format per video
-python main.py --generate --product "fan" --nvideos 10 --format random
-
-# Hook Transition with Benefits base
-python main.py --generate --product "fan" --nvideos 6 --format hook_transition --format-base benefits
-```
-
----
-
-#### `--format-base <base>`
-
-Only relevant when `--format hook_transition`.  
-Specifies what follows the intro hook clip.
-
-| Value | Description |
-|---|---|
-| `benefits` | *(default)* Benefit texts + CTA after the hook |
-| `emotion` | Full-screen emotional statement + CTA after the hook |
-
-```powershell
-python main.py --generate --product "fan" --format hook_transition --format-base emotion
-```
-
----
-
-#### `--cta-type <type>`
-
-Choose the call-to-action style. Without this flag, you are asked interactively.
-
-| Value | Description |
-|---|---|
-| `trigger` | A fixed "Comment 'WORD' below 👇" text — same across every video. Good for ManyChat automations. |
-| `generic` | A random CTA is picked per video from a built-in pool (link in bio, tap the link, etc.) |
-
-```powershell
-# Generic CTA — different text each video
-python main.py --generate --product "fan" --nvideos 8 --cta-type generic
-
-# Trigger CTA — same text every video (default trigger: INFO)
-python main.py --generate --product "fan" --nvideos 8 --cta-type trigger
-
-# Trigger CTA with custom word
-python main.py --generate --product "fan" --nvideos 8 --cta-type trigger --cta-trigger FREE
-```
-
----
-
-#### `--cta-trigger <word>`
-
-The trigger word to use when `--cta-type trigger`.  
-Case-insensitive; automatically uppercased.  
-Default: `INFO`.
-
-```powershell
-python main.py --generate --product "fan" --cta-type trigger --cta-trigger "FREE GUIDE"
-# → "Comment 'FREE GUIDE' below 👇"
-```
-
----
-
-#### `--skip-script`
-
-Skip Claude API script generation entirely.  
-Clips are assembled with no overlay text (no HOOK, PROBLEM, SOLUTION, PROOF, EMOTION).  
-The CTA overlay is still applied.  
-Useful for testing assembly without spending API credits.
-
-```powershell
-python main.py --generate --product "fan" --nvideos 3 --skip-script
-```
-
----
-
-#### `--parallel <N>`
-
-Number of parallel assembly workers (1 – 4). Default: `1` (sequential).
-
-Script generation always runs sequentially (API calls in series).  
-Only the video assembly step (MoviePy + FFmpeg rendering) is parallelized.
-
-**Thread safety:**  
-Workers receive `history=None` — they do not write to `.asset_history.json`.  
-The main thread updates the history file after each future completes, protected by a `threading.Lock`.
-
-**When to use:**
-- `--parallel 2` — good default on a mid-range CPU (prevents thermal throttling)
-- `--parallel 3` / `--parallel 4` — only if your CPU has plenty of cores free; MoviePy is already multi-threaded internally
-
-```powershell
-# Generate 12 videos, 3 at a time
-python main.py --generate --product "hanging fan" --nvideos 12 --parallel 3
-
-# Maximum parallelism (4 workers)
-python main.py --generate --product "fan" --nvideos 8 --parallel 4
-```
-
-> Output folders are named `YYYYMMDD_HHMMSS_NN` where `NN` is the variation index, so parallel runs never overwrite each other even when they start in the same second.
+| Flag | Type | Default | Description |
+|---|---|---|---|
+| `--nvideos <N>` / `--count <N>` | int | — | Number of videos to generate (1–50) |
+| `--format <format>` | string | interactive | `random` · `benefits` · `emotion` · `hook_transition` · `plot_twist` |
+| `--format-base <base>` | string | `benefits` | Base for `hook_transition`: `benefits` or `emotion` |
+| `--cta-type <type>` | string | interactive | `trigger` · `generic` |
+| `--cta-trigger <word>` | string | `INFO` | Trigger word for `--cta-type trigger` |
+| `--language <lang>` / `--lang` | string | `en` | Language for all generated text: `en` · `es` · `de` · `fr` · `it` |
+| `--skip-script` | flag | — | Skip Claude script generation (no overlay text) |
+| `--parallel <N>` | int | `1` | Parallel assembly workers (1–4) |
 
 ---
 
@@ -380,47 +376,52 @@ python main.py --generate --product "fan" --nvideos 8 --parallel 4
 | **Hook Transition** | intro clip → Benefits or Emotion layout | as above for chosen base |
 | **Plot Twist** | creator clip (3 s) → product clips | PLOT_HOOK during creator · PLOT_REVEAL after |
 
-All overlay text: **TikTok Sans Bold**, white fill, 3px black stroke, no background pill.  
-Font fallback chain: TikTok Sans Bold → TikTok Sans Black → Roboto Light → Impact → Segoe UI Bold → Arial Bold → PIL default.  
-Hook Y position: randomised per video between **30 % – 50 %** of frame height (seed `variation + 13`).
+All overlay text: **TikTok Sans Bold**, white fill, 6px black stroke, no background pill.  
+Font fallback chain (macOS): TikTok Sans Bold → TikTok Sans Black → Roboto Light → PIL default.  
+Font fallback chain (Windows): TikTok Sans Bold → TikTok Sans Black → Roboto Light → Impact → Segoe UI Bold → Arial Bold → PIL default.  
+Hook Y position: randomised per video between **30% – 50%** of frame height.
 
 ---
 
 ## Non-interactive examples
 
-### Single-stage runs
+### macOS
 
-```powershell
-# Extract — fast pass, no voice sep, no subtitle check, fresh start
+```bash
+# Extract — fast pass, no voice separation, fresh start
 python main.py --extract --product "hanging portable fan" --no-resume --skip-voice --skip-subtitle-check
 
 # Extract — full quality, resume if interrupted
 python main.py --extract --product "hanging portable fan" --resume --voice
 
-# Generate — 6 random-format videos, generic CTA
-python main.py --generate --product "hanging portable fan" --nvideos 6 --format random --cta-type generic
+# Generate — 6 random-format videos, Spanish, generic CTA
+python main.py --generate --product "hanging portable fan" --nvideos 6 --format random --language es --cta-type generic
 
-# Generate — 12 Benefits videos, trigger CTA "LINK", 3 parallel workers
+# Generate — 12 Benefits videos, trigger CTA, 3 parallel workers
 python main.py --generate --product "hanging portable fan" --nvideos 12 --format benefits --cta-type trigger --cta-trigger LINK --parallel 3
 
-# Reclassify leftover clips with Claude Vision
-python main.py --reclassify --keyword "hanging portable fan"
-```
-
-### Pipeline (chain with `&&`)
-
-```powershell
-# Full pipeline — extract then generate 10 videos, no interaction at any point
-python main.py --extract --product "hanging portable fan" --no-resume --skip-voice ^
+# Full pipeline — extract then generate 10 videos
+python main.py --extract --product "hanging portable fan" --no-resume --skip-voice \
   && python main.py --generate --product "hanging portable fan" --nvideos 10 --format random --cta-type generic --parallel 3
 
-# Queue two different products back to back
-python main.py --generate --product "pattern handbag purse" --nvideos 8 --format benefits --parallel 2 ^
+# Queue two products back to back
+python main.py --generate --product "pattern handbag purse" --nvideos 8 --format benefits --parallel 2 \
   && python main.py --generate --product "magnetic phone holder" --nvideos 8 --format random --parallel 2
 ```
 
-> On PowerShell use `^` for line continuation or write everything on one line.  
-> `&&` runs the second command only if the first exits with code 0.
+### Windows (PowerShell)
+
+```powershell
+# Extract — fast pass
+python main.py --extract --product "hanging portable fan" --no-resume --skip-voice --skip-subtitle-check
+
+# Generate — 12 Benefits videos, trigger CTA, 3 parallel workers
+python main.py --generate --product "hanging portable fan" --nvideos 12 --format benefits --cta-type trigger --cta-trigger LINK --parallel 3
+
+# Full pipeline (use ^ for line continuation in PowerShell)
+python main.py --extract --product "hanging portable fan" --no-resume --skip-voice `
+  && python main.py --generate --product "hanging portable fan" --nvideos 10 --format random --cta-type generic --parallel 3
+```
 
 ---
 
@@ -451,8 +452,8 @@ No file collisions, no shared state inside workers.
 
 ## Asset history (anti-repetition)
 
-The file `D:\Products Reels\<keyword>\.asset_history.json` tracks the last **5** uses of each asset type.  
-If a candidate asset is in the history, it is skipped and the next candidate is tried.
+The file `<keyword>/.asset_history.json` tracks the last **10** uses of each asset type.  
+If a candidate asset is in the history it is skipped; the next candidate is tried instead.
 
 **Tracked asset types:**
 
@@ -470,18 +471,21 @@ If a candidate asset is in the history, it is skipped and the next candidate is 
 | `plot_hook_text` | PLOT_HOOK overlay text |
 | `plot_reveal_text` | PLOT_REVEAL overlay text |
 
-The history file is updated after every successfully assembled video and persists across sessions.  
-Delete `.asset_history.json` to reset tracking for a keyword.
+**Script-level anti-repetition:** before each Claude API call, the last 5 texts per field
+are injected into the prompt as an `AVOID REPETITION` section, so generated texts stay
+fresh even within the same `--nvideos` batch.
+
+Delete `.asset_history.json` to reset all tracking for a keyword.
 
 ---
 
 ## Music setup
 
-Drop royalty-free MP3 files into the folder specified by `MUSIC_FOLDER` in `.env` (default: `D:\Music for Shorts\`).  
+Drop royalty-free MP3 files into the folder set by `MUSIC_FOLDER` in `.env`.  
 Sub-folders by genre or mood are supported — all MP3s are discovered recursively.
 
 Music selection is seeded per `keyword + format + variation` for deterministic but wide rotation.  
-The anti-repetition system ensures the same track is not reused within the last 5 videos.
+The anti-repetition system prevents the same track from repeating within the last 10 videos.
 
 **Google Drive source (optional):**  
 Set `MUSIC_SOURCE=drive` in `.env` and fill in `DRIVE_MUSIC_FOLDER_ID`.  
@@ -496,19 +500,31 @@ Copy `.env.example` to `.env` and edit.
 | Variable | Default | Description |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | — | Claude API key (required for scripts + Vision) |
-| `SSD_DRIVE` | `D` | Drive letter of your external SSD |
-| `SSD_BASE_PATH` | `D:\Products Reels` | Root folder for all keyword folders |
+| `SSD_BASE_PATH` | platform default | Root folder for all keyword folders |
+| `SSD_DRIVE` | `D` | Windows only — drive letter (ignored on macOS) |
+| `MUSIC_FOLDER` | platform default | Folder with royalty-free MP3s |
+| `MUSIC_SOURCE` | `local` | `local` or `drive` (Google Drive) |
 | `WHISPER_MODEL` | `base` | `tiny` · `base` · `small` · `medium` · `large` |
 | `DEMUCS_MODEL` | `htdemucs` | Demucs model — `htdemucs` is lightest on CPU |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model for scripts and Vision |
-| `TARGET_DURATION` | `30` | Target video length in seconds (also used by script prompt) |
+| `TARGET_DURATION` | `30` | Target video length in seconds |
 | `MIN_CLIP_DURATION` | `2` | Clips shorter than this (seconds) are discarded |
 | `MAX_CLIP_DURATION` | `6` | Clips longer than this are trimmed |
-| `SCENE_THRESHOLD` | `0.4` | FFmpeg scene-cut sensitivity (0 = detect all cuts, 1 = none) |
-| `RAM_SAFETY_GB` | `2` | Pause processing if free RAM drops below this value |
+| `SCENE_THRESHOLD` | `0.4` | FFmpeg scene-cut sensitivity (0 = all cuts, 1 = none) |
+| `RAM_SAFETY_GB` | `2` | Pause if free RAM drops below this (GB) |
 | `MUSIC_VOLUME` | `0.03` | Background music volume (0.0 – 1.0) |
-| `MUSIC_FOLDER` | `D:\Music for Shorts` | Local folder with royalty-free MP3s |
-| `MUSIC_SOURCE` | `local` | `local` or `drive` (Google Drive) |
-| `HD_FILTER` | `true` | Apply FFmpeg sharpening pass after export (`true` / `false`) |
+| `HD_FILTER` | `true` | FFmpeg sharpening pass after export (`true` / `false`) |
 
-**HD filter** (`HD_FILTER=true`): runs `unsharp=5:5:1.0` + `eq=contrast=1.05:saturation=1.1` via FFmpeg on the final render, then replaces `final.mp4` in-place. Add `HD_FILTER=false` to `.env` to disable.
+**HD filter** (`HD_FILTER=true`): runs `unsharp=5:5:1.0` + `eq=contrast=1.05:saturation=1.1`
+via FFmpeg on the final render, then replaces the file in-place.  
+On macOS the filter uses the **VideoToolbox** hardware encoder (Apple Silicon) for speed.  
+Set `HD_FILTER=false` to skip it entirely.
+
+**Platform defaults** (when `SSD_BASE_PATH` / `MUSIC_FOLDER` are not set in `.env`):
+
+| Variable | Windows default | macOS default |
+|---|---|---|
+| `SSD_BASE_PATH` | `D:\Products Reels` | `~/Products Reels` |
+| `MUSIC_FOLDER` | `D:\Music for Shorts` | `~/Music for Shorts` |
+| `HOOK_TRANSITIONS_DIR` | `D:\Hook Transitions` | `~/Hook Transitions` |
+| `CREATORS_DIR` | `D:\Creators` | `~/Creators` |

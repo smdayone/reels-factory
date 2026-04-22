@@ -1,16 +1,16 @@
 """
-Windows path handling utilities for NTFS SSD.
+Path handling utilities — cross-platform (Windows + macOS).
 """
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 
 
-def to_windows_path(path: Path) -> str:
-    """Convert Path object to Windows-style path string."""
-    return str(PureWindowsPath(path))
+def to_native_path(path: Path) -> str:
+    """Convert Path object to native OS string (handles both / and \\ automatically)."""
+    return str(path)
 
 
 def safe_filename(name: str) -> str:
-    """Strip characters invalid in Windows filenames."""
+    """Strip characters invalid in Windows or macOS filenames."""
     invalid = r'\/:*?"<>|'
     for ch in invalid:
         name = name.replace(ch, "_")

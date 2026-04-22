@@ -6,7 +6,6 @@ Focus: buyer persona → pain point → product as solution.
 import re
 import httpx
 from config.settings import ANTHROPIC_API_KEY, CLAUDE_MODEL, TARGET_DURATION
-from src.utils.languages import SCRIPT_LANGUAGE_INSTRUCTION
 from rich.console import Console
 
 console = Console()
@@ -19,7 +18,6 @@ Category: {category}
 Target duration: {duration} seconds
 Buyer persona: {persona}
 Key problem identified from video analysis: {problem_summary}
-Target language: {language_instruction}
 
 Write OVERLAY TEXT for each section. These words appear burned into the video frame —
 they are NOT spoken aloud. Think bold, punchy captions — not sentences.
@@ -37,21 +35,17 @@ Structure:
 
 OVERLAY RULES (sections 1-5, 7-9):
 - Each section = 1 short line, max 8 words
-- NO punctuation of any kind — no em-dash, no comma, no period, no colon, no slash
-- NO emoji, NO special characters, NO symbols
-- NO abbreviations with symbols (write out words in full)
+- NO punctuation except "—" for pauses
+- NO emoji
 - Sentence case (first word capitalised only)
-- Write in the target language above — cultural adaptation, not literal translation
 - Never mention price, never say buy/purchase/shop/order
 - No superlatives without evidence
 
 CAPTION RULES (section 6):
 - 1-3 lines of engaging copy — DIFFERENT tone every video (rotate: storytelling /
   rhetorical question / bold statement / relatable confession / list of 3)
-- Write in the target language above
 - Do NOT repeat the hook verbatim
-- End with 5-8 relevant hashtags on a new line: mix international (English) hashtags
-  with hashtags in the target language
+- End with 5-8 relevant hashtags on a new line (mix niche + broad)
 - Emoji allowed, keep it natural
 - Never mention price
 
@@ -74,12 +68,9 @@ def generate_script(
     persona: dict,
     problem_summary: str,
     er_references: list[dict] | None = None,
-    language: str = "en",
-    recent_texts: "dict[str, list[str]] | None" = None,
 ) -> dict:
-    """Generate full video script in the requested language. Returns dict with sections.
+    """Generate full video script. Returns dict with sections.
 
-    language: ISO 639-1 code — must be a key in SUPPORTED_LANGUAGES (en, es, de, fr, it).
     er_references: list of {"caption": str, "er": float} dicts sorted by ER desc.
     Top entries are appended to the prompt as style inspiration for the CAPTION section.
     """
@@ -87,46 +78,18 @@ def generate_script(
         console.print("  [yellow]No API key — skipping script generation[/yellow]")
         return {}
 
-    lang_instruction = SCRIPT_LANGUAGE_INSTRUCTION.get(
-        language, SCRIPT_LANGUAGE_INSTRUCTION["en"]
-    )
-
     prompt = SCRIPT_PROMPT.format(
         product_name=product_name,
         category=category,
         duration=TARGET_DURATION,
         persona=f"{persona['name']} ({persona['age_range']}) — {persona['main_pain']}",
         problem_summary=problem_summary,
-        language_instruction=lang_instruction,
     )
 
     if er_references:
         prompt += "\n\nHIGH-PERFORMING CAPTIONS (use as style/tone inspiration for CAPTION only — do not copy verbatim):\n"
         for ref in er_references:
             prompt += f"- ER {ref.get('er', '?')}%: {ref.get('caption', '').strip()}\n"
-
-    # Inject recently used overlay texts so Claude can actively avoid repeating them
-    _AVOID_MAP = {
-        "HOOK":        "hook_text",
-        "PROBLEM":     "problem_text",
-        "SOLUTION":    "solution_text",
-        "PROOF":       "proof_text",
-        "EMOTION":     "emotion_text",
-        "PLOT_HOOK":   "plot_hook_text",
-        "PLOT_REVEAL": "plot_reveal_text",
-    }
-    if recent_texts:
-        avoid_lines = []
-        for label, hist_key in _AVOID_MAP.items():
-            values = recent_texts.get(hist_key, [])
-            if values:
-                avoid_lines.append(f"{label}: {' | '.join(values)}")
-        if avoid_lines:
-            prompt += (
-                "\n\nAVOID REPETITION — these overlay texts appeared in recent videos for this product. "
-                "Do NOT reuse them verbatim or as close paraphrases. Find fresh angles:\n"
-                + "\n".join(avoid_lines)
-            )
 
     try:
         response = httpx.post(
@@ -138,7 +101,7 @@ def generate_script(
             },
             json={
                 "model": CLAUDE_MODEL,
-                "max_tokens": 1000,
+                "max_tokens": 800,
                 "messages": [{"role": "user", "content": prompt}]
             },
             timeout=30,
@@ -147,8 +110,7 @@ def generate_script(
 
         # Parse sections
         sections = {}
-        for section in ["HOOK", "PROBLEM", "SOLUTION", "PROOF", "CTA", "CAPTION",
-                         "EMOTION", "PLOT_HOOK", "PLOT_REVEAL", "PERSONA_NOTE"]:
+        for section in ["HOOK", "PROBLEM", "SOLUTION", "PROOF", "CTA", "CAPTION", "PERSONA_NOTE"]:
             match = re.search(rf"{section}:\s*(.+?)(?=\n[A-Z_]+:|$)", raw, re.DOTALL)
             if match:
                 sections[section.lower()] = match.group(1).strip()

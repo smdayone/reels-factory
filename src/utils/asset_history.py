@@ -83,3 +83,10 @@ class AssetHistory:
         queue.append(value)
         if len(queue) > MAX_HISTORY:
             queue.pop(0)
+
+    def get_recent(self, asset_type: str, n: int = 5) -> list[str]:
+        """Return the last n used values for asset_type (most recent last).
+        Returns [] if asset_type is unknown or history is empty."""
+        if asset_type not in self._data:
+            return []
+        return list(self._data[asset_type][-n:])

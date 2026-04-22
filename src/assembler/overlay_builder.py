@@ -23,7 +23,18 @@ from rich.console import Console
 console = Console()
 
 # ── layout constants ─────────────────────────────────────────────────────────
+_HOME = Path.home()
+
 _FONT_CANDIDATES = [
+    # ── macOS — user fonts (~/Library/Fonts/) ───────────────────────────────
+    _HOME / "Library" / "Fonts" / "TikTokSans-Bold.ttf",
+    _HOME / "Library" / "Fonts" / "TikTokSans-Black.ttf",
+    _HOME / "Library" / "Fonts" / "Roboto-Light.ttf",
+    # ── macOS — system fonts (/Library/Fonts/) ──────────────────────────────
+    Path("/Library/Fonts/TikTokSans-Bold.ttf"),
+    Path("/Library/Fonts/TikTokSans-Black.ttf"),
+    Path("/Library/Fonts/Roboto-Light.ttf"),
+    # ── Windows — system fonts (C:\Windows\Fonts\) ──────────────────────────
     Path(r"C:\Windows\Fonts\TikTokSans-Bold.ttf"),          # TikTok Sans Bold — primary (OFL-1.1)
     Path(r"C:\Users\Windows20\AppData\Local\Microsoft\Windows\Fonts\TikTokSans-Bold.ttf"),
     Path(r"C:\Windows\Fonts\TikTokSans-Black.ttf"),          # TikTok Sans Black — heavier fallback

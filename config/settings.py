@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -7,19 +8,50 @@ load_dotenv()
 # Base paths
 BASE_DIR = Path(__file__).parent.parent
 
-# SSD paths (Windows NTFS)
-SSD_DRIVE = os.getenv("SSD_DRIVE", "D")
-SSD_BASE  = Path(f"{SSD_DRIVE}:\\Products Reels")
+# ---------------------------------------------------------------------------
+# Platform-aware SSD / storage paths
+#
+# Priority for every path: explicit .env variable → platform default.
+#
+# Windows default : D:\Products Reels  (drive letter from SSD_DRIVE)
+# macOS   default : ~/Products Reels   (inside user home — works with exFAT SSD
+#                   mounted at /Volumes/<name> when SSD_BASE_PATH is set in .env)
+# ---------------------------------------------------------------------------
+
+def _win(rel: str) -> str:
+    """Build a Windows path using SSD_DRIVE (ignored on macOS)."""
+    drive = os.getenv("SSD_DRIVE", "D")
+    return f"{drive}:\\{rel}"
+
+def _default(env_win: str, mac_home_rel: str) -> str:
+    """Return env_win on Windows, ~/mac_home_rel on macOS — both overridable via .env."""
+    return env_win if sys.platform != "darwin" else str(Path.home() / mac_home_rel)
+
+# Windows legacy: SSD_DRIVE lets you change D: → E: without touching other vars
+SSD_DRIVE = os.getenv("SSD_DRIVE", "D")   # Windows only; ignored on macOS
+
+SSD_BASE = Path(os.getenv(
+    "SSD_BASE_PATH",
+    _default(_win("Products Reels"), "Products Reels"),
+))
 
 # Music folder — scanned recursively, subfolders supported
-# Default: D:\Music for Shorts  (change via MUSIC_FOLDER in .env)
-MUSIC_DIR = Path(os.getenv("MUSIC_FOLDER", f"{SSD_DRIVE}:\\Music for Shorts"))
+MUSIC_DIR = Path(os.getenv(
+    "MUSIC_FOLDER",
+    _default(_win("Music for Shorts"), "Music for Shorts"),
+))
 
 # Hook Transition clips — video intro with original audio (format: Hook Transition)
-HOOK_TRANSITIONS_DIR = Path(os.getenv("HOOK_TRANSITIONS_DIR", "D:\\Hook Transitions"))
+HOOK_TRANSITIONS_DIR = Path(os.getenv(
+    "HOOK_TRANSITIONS_DIR",
+    _default("D:\\Hook Transitions", "Hook Transitions"),
+))
 
 # Creator clips — 3-second intros for Plot Twist format
-CREATORS_DIR = Path(os.getenv("CREATORS_DIR", "D:\\Creators"))
+CREATORS_DIR = Path(os.getenv(
+    "CREATORS_DIR",
+    _default("D:\\Creators", "Creators"),
+))
 
 def get_keyword_paths(keyword: str) -> dict:
     """Return all paths for a given keyword."""
