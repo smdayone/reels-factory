@@ -32,25 +32,28 @@ SSD_DRIVE = os.getenv("SSD_DRIVE", "D")   # Windows only; ignored on macOS
 
 SSD_BASE = Path(os.getenv(
     "SSD_BASE_PATH",
-    _default(_win("Products Reels"), "Products Reels"),
+    _default(_win("Reels Assets\\Products Reels"), "Movies/Reels Assets/Products Reels"),
 ))
+
+# Parent of SSD_BASE — all sibling folders (Music, Hook Transitions, Creators) live here
+_ASSETS_ROOT = SSD_BASE.parent
 
 # Music folder — scanned recursively, subfolders supported
 MUSIC_DIR = Path(os.getenv(
     "MUSIC_FOLDER",
-    _default(_win("Music for Shorts"), "Music for Shorts"),
+    str(_ASSETS_ROOT / "Music for Shorts"),
 ))
 
 # Hook Transition clips — video intro with original audio (format: Hook Transition)
 HOOK_TRANSITIONS_DIR = Path(os.getenv(
     "HOOK_TRANSITIONS_DIR",
-    _default("D:\\Hook Transitions", "Hook Transitions"),
+    str(_ASSETS_ROOT / "Hook Transitions"),
 ))
 
 # Creator clips — 3-second intros for Plot Twist format
 CREATORS_DIR = Path(os.getenv(
     "CREATORS_DIR",
-    _default("D:\\Creators", "Creators"),
+    str(_ASSETS_ROOT / "Creators"),
 ))
 
 def get_keyword_paths(keyword: str) -> dict:

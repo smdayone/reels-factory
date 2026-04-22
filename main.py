@@ -655,18 +655,27 @@ def mode_generate(keyword: str, args) -> None:
       Each worker gets history=None; the main thread records history after
       each future completes (thread-safe via Lock).
     """
-    # ── Language validation ───────────────────────────────────────────────────
-    language = getattr(args, "language", "en") or "en"
-    language = language.lower().strip()
-    if language not in SUPPORTED_LANGUAGES:
-        console.print(
-            f"[red]Unsupported language '{language}'.[/red]  "
-            f"Supported: "
-            + "  ".join(
-                f"[cyan]{k}[/cyan] ({v})" for k, v in SUPPORTED_LANGUAGES.items()
+    # ── Language selection ────────────────────────────────────────────────────
+    language = getattr(args, "language", None) or None
+    if language:
+        language = language.lower().strip()
+        if language not in SUPPORTED_LANGUAGES:
+            console.print(
+                f"[red]Unsupported language '{language}'.[/red]  Supported: "
+                + "  ".join(f"[cyan]{k}[/cyan] ({v})" for k, v in SUPPORTED_LANGUAGES.items())
             )
-        )
-        raise SystemExit(1)
+            raise SystemExit(1)
+    else:
+        lang_choices = list(SUPPORTED_LANGUAGES.keys())
+        console.print("\n[bold]Language[/bold]")
+        for i, (k, v) in enumerate(SUPPORTED_LANGUAGES.items(), 1):
+            console.print(f"  [cyan]{i}[/cyan]  {v} ({k})")
+        raw = Prompt.ask("Choose a number", default="1").strip()
+        try:
+            idx = int(raw) - 1
+            language = lang_choices[idx] if 0 <= idx < len(lang_choices) else "en"
+        except (ValueError, IndexError):
+            language = "en"
 
     total_clips = show_clips_summary(keyword)
 
@@ -1135,7 +1144,7 @@ Pipeline (queue multiple runs):
     )
     parser.add_argument(
         "--language", "--lang",
-        type=str, default="en",
+        type=str, default=None,
         dest="language",
         metavar="LANG",
         help=(

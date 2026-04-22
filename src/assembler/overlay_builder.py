@@ -47,17 +47,17 @@ _FONT_CANDIDATES = [
 ]
 
 FONT_SIZE         = 46
-FONT_SIZE_EMOTION = 58
+FONT_SIZE_EMOTION = 46
 WRAP_WIDTH     = 900
 FRAME_W        = 1080
 FRAME_H        = 1920
-LETTER_SPACING = 0                 # TikTok Sans Bold — native tracking, no adjustment needed
+LETTER_SPACING = 1                 # TikTok Sans Bold — native tracking, no adjustment needed
 
 # Hook y_frac is randomised per video (0.30-0.50) — no fixed constant
 Y_BENEFIT = 0.40
 Y_CTA     = 0.72
 
-STROKE_W  = 6                      # bold stroke — matches native TikTok caption style
+STROKE_W  = 4                      # bold stroke — matches native TikTok caption style
 
 # Reusable dummy draw for text measurement (no allocation per call)
 _DUMMY_DRAW = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
