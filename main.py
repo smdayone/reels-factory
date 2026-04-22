@@ -1010,10 +1010,10 @@ def mode_publish(args) -> None:
 
     # Print the short commit hash from the commit output
     commit_line = commit_result.stdout.strip().splitlines()[0] if commit_result.stdout else ""
-    console.print(f"  [green]✓ Committed[/green]  [dim]{commit_line}[/dim]")
+    console.print(f"  [green]OK Committed[/green]  [dim]{commit_line}[/dim]")
 
     # ── Push ──────────────────────────────────────────────────────────────────
-    console.print("  Pushing to [cyan]origin/main[/cyan]…")
+    console.print("  Pushing to [cyan]origin/main[/cyan]...")
     push_result = subprocess.run(
         ["git", "push", "origin", "main"],
         capture_output=True, text=True,
@@ -1022,7 +1022,7 @@ def mode_publish(args) -> None:
         console.print(f"[red]Push failed:[/red]\n{push_result.stderr.strip()}")
         raise SystemExit(1)
 
-    console.print("  [green]✓ Pushed to origin/main[/green]")
+    console.print("  [green]OK Pushed to origin/main[/green]")
     console.print(
         f"\n[bold green]Published.[/bold green]  "
         f"[dim]https://github.com/smdayone/reels-factory[/dim]"

@@ -18,6 +18,7 @@ models/
 # Temp processing files
 temp/
 *.tmp
+*.tmp.*
 
 # Windows
 Thumbs.db
