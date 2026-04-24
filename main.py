@@ -42,7 +42,7 @@ from config.settings import (
 from src.utils.system_check import system_report, check_disk_space
 from src.analyzer.scene_detector import detect_scenes, has_audio_speech, get_video_duration
 from src.analyzer.transcriber import transcribe, save_transcript
-from src.analyzer.subtitle_detector import has_hardcoded_text
+from src.analyzer.subtitle_detector import check_and_blur_text
 from src.extractor.voice_separator import separate_voice
 from src.extractor.clip_classifier import classify_by_transcript, classify_by_vision
 from src.script.persona_builder import identify_persona
@@ -333,23 +333,18 @@ def process_video(
         clip_out = paths["clips"][category] / f"{video_path.stem}_clip_{i:03d}.mp4"
         _cut_clip(video_path, clip_out, start, clip_duration, no_vocals_path)
 
-        # Subtitle / hardcoded text check
+        # Subtitle / hardcoded text check — blur regions instead of discarding
         if not skip_subtitle_check and clip_out.exists():
-            if has_hardcoded_text(clip_out):
-                clip_out.unlink(missing_ok=True)
-                discarded_text += 1
-                console.print(
-                    f"  [yellow]Discarded (hardcoded text):[/yellow] "
-                    f"{clip_out.name} [{category}]"
-                )
-                continue
+            had_text, blur_ok = check_and_blur_text(clip_out)
+            if had_text:
+                discarded_text += 1  # counter repurposed: "clips with text found"
 
         kept += 1
 
     elapsed = time.time() - _t0
     console.print(
         f"  [green]Done:[/green] {kept} clips kept  |  "
-        f"{discarded_short} too short  |  {discarded_text} discarded (text overlay)  |  "
+        f"{discarded_short} too short  |  {discarded_text} blurred (text overlay)  |  "
         f"[dim]{elapsed:.1f}s[/dim]"
     )
 

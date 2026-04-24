@@ -2,9 +2,9 @@
 Detect hardcoded subtitles or text overlays in video clips.
 
 Strategy: extract 3 frames (25%, 50%, 75% of clip duration) and ask
-Claude Vision whether each frame contains burned-in text.
+Claude Vision whether each frame contains burned-in text AND where.
 
-If ANY frame contains text → the clip is discarded.
+If text is found → apply FFmpeg blur to detected regions (instead of discarding).
 Clips without a clean frame check are kept (fail-open to avoid losing content).
 
 Cost: ~$0.002-0.004 per clip (3 small JPEG frames via claude-haiku).
@@ -24,12 +24,14 @@ from config.settings import ANTHROPIC_API_KEY, CLAUDE_MODEL
 
 console = Console()
 
-# Use the cheapest model for this binary YES/NO task
 VISION_MODEL = "claude-haiku-4-5"
+
+# Video frame dimensions (9:16 1080p)
+FRAME_W = 1080
+FRAME_H = 1920
 
 
 def _get_duration(video_path: Path) -> float | None:
-    """Get clip duration via ffprobe."""
     cmd = [
         "ffprobe", "-v", "quiet",
         "-show_entries", "format=duration",
@@ -44,9 +46,6 @@ def _get_duration(video_path: Path) -> float | None:
 
 
 def _extract_frame(video_path: Path, timestamp: float) -> bytes | None:
-    """Extract one JPEG frame at timestamp, return raw bytes."""
-    # mkstemp creates the file and returns an open fd — close it immediately
-    # so FFmpeg can write to the path without Windows locking conflicts.
     fd, tmp_path = tempfile.mkstemp(suffix=".jpg")
     os.close(fd)
     tmp = Path(tmp_path)
@@ -56,8 +55,8 @@ def _extract_frame(video_path: Path, timestamp: float) -> bytes | None:
             "-ss", str(timestamp),
             "-i", str(video_path),
             "-frames:v", "1",
-            "-q:v", "4",           # quality 4 = small file, good enough for text detection
-            "-vf", "scale=480:-2", # downscale to save API tokens
+            "-q:v", "4",
+            "-vf", "scale=480:-2",
             "-loglevel", "error",
             str(tmp),
         ], capture_output=True)
@@ -65,83 +64,185 @@ def _extract_frame(video_path: Path, timestamp: float) -> bytes | None:
             return tmp.read_bytes()
         return None
     finally:
-        # Suppress PermissionError: Windows may briefly hold the handle after read
         with contextlib.suppress(PermissionError, FileNotFoundError):
             tmp.unlink()
 
 
-def has_hardcoded_text(clip_path: Path) -> bool:
+def _ask_claude_regions(frames: list[bytes]) -> dict:
     """
-    Returns True if the clip contains hardcoded subtitles or text overlays.
-    Returns False if clean or if the check could not be completed.
-
-    What counts as hardcoded text:
-    - Subtitles or captions at the bottom of the frame
-    - Brand name / product name burned into the video
-    - Price tags, promotional text, countdown timers
-    - Social media handles (@username, #hashtag overlays)
-    - Any text that is part of the video image itself (not a UI element)
+    Ask Claude Vision where text is located in the frames.
+    Returns dict: {"has_text": bool, "regions": [{"y_start": float, "y_end": float}, ...]}
+    y_start and y_end are fractions of frame height (0.0 = top, 1.0 = bottom).
     """
-    if not ANTHROPIC_API_KEY:
-        console.print("  [dim]Subtitle check skipped — no ANTHROPIC_API_KEY[/dim]")
-        return False
-
-    duration = _get_duration(clip_path)
-    if not duration or duration < 0.5:
-        return False
-
-    # Sample at 25%, 50%, 75% of the clip
-    timestamps = [duration * pct for pct in (0.25, 0.50, 0.75)]
-
     content = []
-    frames_added = 0
-    for ts in timestamps:
-        frame_bytes = _extract_frame(clip_path, ts)
-        if frame_bytes:
-            content.append({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/jpeg",
-                    "data": base64.standard_b64encode(frame_bytes).decode(),
-                },
-            })
-            frames_added += 1
-
-    if frames_added == 0:
-        return False
+    for frame_bytes in frames:
+        content.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": base64.standard_b64encode(frame_bytes).decode(),
+            },
+        })
 
     content.append({
         "type": "text",
         "text": (
-            "Look at these video frames.\n"
-            "Does the video contain ANY hardcoded text burned into the image?\n"
+            "Look at these video frames carefully.\n"
+            "Does the video contain hardcoded text burned into the image?\n"
             "This includes: subtitles, captions, brand names, price tags, "
-            "social handles, hashtag overlays, countdown timers, or any other "
-            "text that is part of the video itself.\n\n"
-            "Ignore: UI elements, watermarks in the very corner (small logos are OK).\n\n"
-            "Reply with ONLY: YES or NO"
+            "social handles (@username), hashtag overlays, countdown timers, "
+            "or any text that is part of the video image itself.\n\n"
+            "Ignore: tiny watermarks in the very corner (small logos < 5% of frame).\n\n"
+            "Reply ONLY with valid JSON, no other text:\n"
+            "- If NO text: {\"has_text\": false, \"regions\": []}\n"
+            "- If text found: {\"has_text\": true, \"regions\": ["
+            "{\"y_start\": 0.75, \"y_end\": 1.0, \"label\": \"subtitles\"}]}\n\n"
+            "y_start and y_end are fractions of the frame height (0.0=top, 1.0=bottom).\n"
+            "List ALL distinct text regions found. Be precise."
         ),
     })
 
-    try:
-        response = httpx.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": ANTHROPIC_API_KEY,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": VISION_MODEL,
-                "max_tokens": 5,
-                "messages": [{"role": "user", "content": content}],
-            },
-            timeout=30,
-        )
-        answer = response.json()["content"][0]["text"].strip().upper()
-        return answer.startswith("YES")
+    response = httpx.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        json={
+            "model": VISION_MODEL,
+            "max_tokens": 200,
+            "messages": [{"role": "user", "content": content}],
+        },
+        timeout=30,
+    )
+    raw = response.json()["content"][0]["text"].strip()
 
+    # Strip markdown code fences if present
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+
+    return json.loads(raw)
+
+
+def _blur_regions(clip_path: Path, regions: list[dict]) -> bool:
+    """
+    Apply FFmpeg Gaussian blur to each text region in-place.
+    regions: list of {"y_start": float, "y_end": float}
+    Returns True on success, False on failure.
+    """
+    if not regions:
+        return True
+
+    tmp_path = clip_path.parent / f"_blur_tmp_{clip_path.name}"
+
+    # Build FFmpeg filter chain: for each region, crop → blur → overlay
+    # Example for one region: [0:v]crop=W:H:0:Y[c];[c]boxblur=20:1[b];[0:v][b]overlay=0:Y[out]
+    filter_parts = []
+    prev_label = "0:v"
+
+    for idx, region in enumerate(regions):
+        y_px = int(region["y_start"] * FRAME_H)
+        h_px = int((region["y_end"] - region["y_start"]) * FRAME_H)
+        h_px = max(h_px, 2)  # avoid zero-height crop
+
+        crop_label  = f"crop{idx}"
+        blur_label  = f"blur{idx}"
+        out_label   = f"out{idx}" if idx < len(regions) - 1 else "finalout"
+
+        filter_parts.append(f"[{prev_label}]crop={FRAME_W}:{h_px}:0:{y_px}[{crop_label}]")
+        filter_parts.append(f"[{crop_label}]boxblur=20:1[{blur_label}]")
+        filter_parts.append(f"[{prev_label}][{blur_label}]overlay=0:{y_px}[{out_label}]")
+        prev_label = out_label
+
+    filter_complex = ";".join(filter_parts)
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(clip_path),
+        "-filter_complex", filter_complex,
+        "-map", f"[{prev_label}]",
+        "-map", "0:a?",
+        "-c:v", "h264_videotoolbox" if os.sys.platform == "darwin" else "libx264",
+        "-b:v", "5M",
+        "-c:a", "copy",
+        "-loglevel", "error",
+        str(tmp_path),
+    ]
+
+    result = subprocess.run(cmd, capture_output=True)
+    if result.returncode == 0 and tmp_path.exists():
+        clip_path.unlink(missing_ok=True)
+        tmp_path.rename(clip_path)
+        return True
+    else:
+        tmp_path.unlink(missing_ok=True)
+        return False
+
+
+def check_and_blur_text(clip_path: Path) -> tuple[bool, bool]:
+    """
+    Check for hardcoded text. If found, blur the regions in-place.
+
+    Returns (had_text: bool, blur_ok: bool):
+      - had_text=False → clip is clean, no action taken
+      - had_text=True, blur_ok=True  → text found and blurred successfully
+      - had_text=True, blur_ok=False → text found but blur failed (clip kept as-is)
+    """
+    if not ANTHROPIC_API_KEY:
+        console.print("  [dim]Subtitle check skipped — no ANTHROPIC_API_KEY[/dim]")
+        return False, False
+
+    duration = _get_duration(clip_path)
+    if not duration or duration < 0.5:
+        return False, False
+
+    timestamps = [duration * pct for pct in (0.25, 0.50, 0.75)]
+
+    frames = []
+    for ts in timestamps:
+        frame_bytes = _extract_frame(clip_path, ts)
+        if frame_bytes:
+            frames.append(frame_bytes)
+
+    if not frames:
+        return False, False
+
+    try:
+        result = _ask_claude_regions(frames)
     except Exception as e:
         console.print(f"  [yellow]Subtitle check error: {e}[/yellow]")
-        return False  # fail-open: keep the clip if check fails
+        return False, False
+
+    if not result.get("has_text"):
+        return False, False
+
+    regions = result.get("regions", [])
+    labels  = [r.get("label", "text") for r in regions]
+    console.print(
+        f"  [yellow]Text detected:[/yellow] {', '.join(labels)} — blurring regions..."
+    )
+
+    if not regions:
+        # Claude said has_text=true but gave no regions — fall back to blurring bottom 25%
+        regions = [{"y_start": 0.75, "y_end": 1.0}]
+
+    blur_ok = _blur_regions(clip_path, regions)
+    if blur_ok:
+        console.print(f"  [green]Blurred successfully[/green] → {clip_path.name}")
+    else:
+        console.print(f"  [red]Blur failed[/red] — keeping clip as-is")
+
+    return True, blur_ok
+
+
+# ---------------------------------------------------------------------------
+# Legacy alias — kept for backwards compatibility
+# ---------------------------------------------------------------------------
+def has_hardcoded_text(clip_path: Path) -> bool:
+    """Legacy function — now blurs instead of discarding. Always returns False."""
+    check_and_blur_text(clip_path)
+    return False
