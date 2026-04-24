@@ -5,6 +5,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Hugging Face token — elimina il warning di rate limit durante il download dei modelli
+_hf_token = os.getenv("HF_TOKEN")
+if _hf_token:
+    os.environ["HF_TOKEN"] = _hf_token
+
 # Base paths
 BASE_DIR = Path(__file__).parent.parent
 
