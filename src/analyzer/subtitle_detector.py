@@ -1,17 +1,16 @@
 """
 Detect hardcoded subtitles or text overlays in video clips.
 
-Strategy: extract 3 frames (25%, 50%, 75% of clip duration) and ask
-Claude Vision whether each frame contains burned-in text AND where.
-
-If text is found → apply FFmpeg blur to detected regions (instead of discarding).
-Clips without a clean frame check are kept (fail-open to avoid losing content).
+Strategy: extract 3 frames (25%, 50%, 75%) → Claude Vision returns
+bounding boxes → FFmpeg blurs each region in-place using a proper
+split/overlay chain.
 
 Cost: ~$0.002-0.004 per clip (3 small JPEG frames via claude-haiku).
 """
 import contextlib
 import json
 import os
+import sys
 import subprocess
 import tempfile
 import base64
@@ -20,23 +19,26 @@ from pathlib import Path
 import httpx
 from rich.console import Console
 
-from config.settings import ANTHROPIC_API_KEY, CLAUDE_MODEL
+from config.settings import ANTHROPIC_API_KEY
 
 console = Console()
 
-VISION_MODEL = "claude-haiku-4-5"
+VISION_MODEL  = "claude-haiku-4-5"
+FRAME_W       = 1080
+FRAME_H       = 1920
+BLUR_SIGMA    = 30        # gblur strength — high enough to fully obscure text
+BLUR_PADDING  = 0.03      # extra fraction added above/below each region (3% of frame)
 
-# Video frame dimensions (9:16 1080p)
-FRAME_W = 1080
-FRAME_H = 1920
 
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
 def _get_duration(video_path: Path) -> float | None:
     cmd = [
         "ffprobe", "-v", "quiet",
         "-show_entries", "format=duration",
-        "-of", "json",
-        str(video_path),
+        "-of", "json", str(video_path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     try:
@@ -55,24 +57,22 @@ def _extract_frame(video_path: Path, timestamp: float) -> bytes | None:
             "-ss", str(timestamp),
             "-i", str(video_path),
             "-frames:v", "1",
-            "-q:v", "4",
-            "-vf", "scale=480:-2",
+            "-q:v", "2",            # higher quality → Claude sees text more clearly
+            "-vf", "scale=720:-2",  # larger frame → more accurate coordinates
             "-loglevel", "error",
             str(tmp),
         ], capture_output=True)
-        if tmp.exists():
-            return tmp.read_bytes()
-        return None
+        return tmp.read_bytes() if tmp.exists() else None
     finally:
         with contextlib.suppress(PermissionError, FileNotFoundError):
             tmp.unlink()
 
 
-def _ask_claude_regions(frames: list[bytes]) -> dict:
+def _ask_claude(frames: list[bytes]) -> dict:
     """
-    Ask Claude Vision where text is located in the frames.
-    Returns dict: {"has_text": bool, "regions": [{"y_start": float, "y_end": float}, ...]}
-    y_start and y_end are fractions of frame height (0.0 = top, 1.0 = bottom).
+    Ask Claude Vision for exact text region bounding boxes.
+    Returns {"has_text": bool, "regions": [{"y_start": float, "y_end": float}, ...]}
+    All values are fractions of frame height (0.0=top, 1.0=bottom).
     """
     content = []
     for frame_bytes in frames:
@@ -88,22 +88,27 @@ def _ask_claude_regions(frames: list[bytes]) -> dict:
     content.append({
         "type": "text",
         "text": (
-            "Look at these video frames carefully.\n"
-            "Does the video contain hardcoded text burned into the image?\n"
-            "This includes: subtitles, captions, brand names, price tags, "
-            "social handles (@username), hashtag overlays, countdown timers, "
-            "or any text that is part of the video image itself.\n\n"
-            "Ignore: tiny watermarks in the very corner (small logos < 5% of frame).\n\n"
-            "Reply ONLY with valid JSON, no other text:\n"
-            "- If NO text: {\"has_text\": false, \"regions\": []}\n"
-            "- If text found: {\"has_text\": true, \"regions\": ["
-            "{\"y_start\": 0.75, \"y_end\": 1.0, \"label\": \"subtitles\"}]}\n\n"
-            "y_start and y_end are fractions of the frame height (0.0=top, 1.0=bottom).\n"
-            "List ALL distinct text regions found. Be precise."
+            "Analyze these video frames carefully.\n\n"
+            "Find ALL hardcoded text burned into the video image:\n"
+            "  - Subtitles or captions\n"
+            "  - Brand names, product names\n"
+            "  - Social handles (@username) or hashtag overlays\n"
+            "  - Price tags, promo text, countdown timers\n"
+            "  - Any text that is part of the video pixels themselves\n\n"
+            "IGNORE: tiny watermarks smaller than 5% of the frame height.\n\n"
+            "For each text block, measure its vertical position precisely:\n"
+            "  y_start = top edge of text / frame height  (0.0 = very top)\n"
+            "  y_end   = bottom edge of text / frame height (1.0 = very bottom)\n\n"
+            "Be TIGHT: measure exactly where the text starts and ends, "
+            "do not include empty space above/below the text.\n\n"
+            "Reply ONLY with valid JSON — no explanation, no markdown:\n"
+            '{"has_text": false, "regions": []}\n'
+            "or\n"
+            '{"has_text": true, "regions": [{"y_start": 0.82, "y_end": 0.91, "label": "subtitles"}, ...]}'
         ),
     })
 
-    response = httpx.post(
+    resp = httpx.post(
         "https://api.anthropic.com/v1/messages",
         headers={
             "x-api-key": ANTHROPIC_API_KEY,
@@ -112,61 +117,104 @@ def _ask_claude_regions(frames: list[bytes]) -> dict:
         },
         json={
             "model": VISION_MODEL,
-            "max_tokens": 200,
+            "max_tokens": 300,
             "messages": [{"role": "user", "content": content}],
         },
         timeout=30,
     )
-    raw = response.json()["content"][0]["text"].strip()
+    raw = resp.json()["content"][0]["text"].strip()
 
-    # Strip markdown code fences if present
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
+    # Strip markdown fences if present
+    if "```" in raw:
+        parts = raw.split("```")
+        raw = parts[1] if len(parts) > 1 else parts[0]
         if raw.startswith("json"):
             raw = raw[4:]
+    raw = raw.strip()
 
     return json.loads(raw)
 
 
+def _merge_regions(regions: list[dict]) -> list[dict]:
+    """
+    Merge overlapping or adjacent regions and add padding.
+    Also clamps values to [0.0, 1.0].
+    """
+    if not regions:
+        return []
+
+    # Add padding and clamp
+    padded = []
+    for r in regions:
+        padded.append({
+            "y_start": max(0.0, r["y_start"] - BLUR_PADDING),
+            "y_end":   min(1.0, r["y_end"]   + BLUR_PADDING),
+        })
+
+    # Sort by y_start
+    padded.sort(key=lambda r: r["y_start"])
+
+    # Merge overlapping
+    merged = [padded[0]]
+    for r in padded[1:]:
+        last = merged[-1]
+        if r["y_start"] <= last["y_end"]:
+            last["y_end"] = max(last["y_end"], r["y_end"])
+        else:
+            merged.append(r)
+
+    return merged
+
+
 def _blur_regions(clip_path: Path, regions: list[dict]) -> bool:
     """
-    Apply FFmpeg Gaussian blur to each text region in-place.
-    regions: list of {"y_start": float, "y_end": float}
-    Returns True on success, False on failure.
+    Apply strong Gaussian blur to each region in-place using FFmpeg.
+    Uses a proper split/crop/blur/overlay chain — no label reuse bugs.
     """
     if not regions:
         return True
 
-    tmp_path = clip_path.parent / f"_blur_tmp_{clip_path.name}"
+    tmp_path = clip_path.parent / f"_blurtmp_{clip_path.stem}.mp4"
+    n = len(regions)
 
-    # Build FFmpeg filter chain: for each region, crop → blur → overlay
-    # Example for one region: [0:v]crop=W:H:0:Y[c];[c]boxblur=20:1[b];[0:v][b]overlay=0:Y[out]
-    filter_parts = []
-    prev_label = "0:v"
+    # Build filter_complex with explicit split at every step
+    # Single region:
+    #   [0:v]split[base][src];[src]crop=W:H:0:Y[c];[c]gblur=sigma=S[b];[base][b]overlay=0:Y[out]
+    # Two regions:
+    #   [0:v]split[b0][s0];[s0]crop...[c0];[c0]gblur[bl0];[b0][bl0]overlay[step0];
+    #   [step0]split[b1][s1];[s1]crop...[c1];[c1]gblur[bl1];[b1][bl1]overlay[out]
+
+    parts = []
+    current_in = "0:v"
 
     for idx, region in enumerate(regions):
         y_px = int(region["y_start"] * FRAME_H)
-        h_px = int((region["y_end"] - region["y_start"]) * FRAME_H)
-        h_px = max(h_px, 2)  # avoid zero-height crop
+        h_px = max(int((region["y_end"] - region["y_start"]) * FRAME_H), 4)
+        is_last = (idx == n - 1)
+        out_label = "finalout" if is_last else f"step{idx}"
 
-        crop_label  = f"crop{idx}"
-        blur_label  = f"blur{idx}"
-        out_label   = f"out{idx}" if idx < len(regions) - 1 else "finalout"
+        base_lbl = f"base{idx}"
+        src_lbl  = f"src{idx}"
+        crop_lbl = f"crop{idx}"
+        blur_lbl = f"blur{idx}"
 
-        filter_parts.append(f"[{prev_label}]crop={FRAME_W}:{h_px}:0:{y_px}[{crop_label}]")
-        filter_parts.append(f"[{crop_label}]boxblur=20:1[{blur_label}]")
-        filter_parts.append(f"[{prev_label}][{blur_label}]overlay=0:{y_px}[{out_label}]")
-        prev_label = out_label
+        parts.append(f"[{current_in}]split[{base_lbl}][{src_lbl}]")
+        parts.append(f"[{src_lbl}]crop={FRAME_W}:{h_px}:0:{y_px}[{crop_lbl}]")
+        parts.append(f"[{crop_lbl}]gblur=sigma={BLUR_SIGMA}[{blur_lbl}]")
+        parts.append(f"[{base_lbl}][{blur_lbl}]overlay=0:{y_px}[{out_label}]")
 
-    filter_complex = ";".join(filter_parts)
+        current_in = out_label
 
+    filter_complex = ";".join(parts)
+
+    encoder = ["h264_videotoolbox"] if sys.platform == "darwin" else ["libx264"]
     cmd = [
         "ffmpeg", "-y",
         "-i", str(clip_path),
         "-filter_complex", filter_complex,
-        "-map", f"[{prev_label}]",
+        "-map", "[finalout]",
         "-map", "0:a?",
-        "-c:v", "h264_videotoolbox" if os.sys.platform == "darwin" else "libx264",
+        "-c:v", *encoder,
         "-b:v", "5M",
         "-c:a", "copy",
         "-loglevel", "error",
@@ -178,19 +226,26 @@ def _blur_regions(clip_path: Path, regions: list[dict]) -> bool:
         clip_path.unlink(missing_ok=True)
         tmp_path.rename(clip_path)
         return True
-    else:
-        tmp_path.unlink(missing_ok=True)
-        return False
 
+    # Log stderr for debugging
+    if result.stderr:
+        console.print(f"  [dim]FFmpeg blur error: {result.stderr.decode(errors='replace')[-300:]}[/dim]")
+    tmp_path.unlink(missing_ok=True)
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 def check_and_blur_text(clip_path: Path) -> tuple[bool, bool]:
     """
     Check for hardcoded text. If found, blur the regions in-place.
 
     Returns (had_text: bool, blur_ok: bool):
-      - had_text=False → clip is clean, no action taken
-      - had_text=True, blur_ok=True  → text found and blurred successfully
-      - had_text=True, blur_ok=False → text found but blur failed (clip kept as-is)
+      had_text=False             → clip is clean
+      had_text=True, blur_ok=True  → blurred successfully
+      had_text=True, blur_ok=False → blur failed, clip kept as-is
     """
     if not ANTHROPIC_API_KEY:
         console.print("  [dim]Subtitle check skipped — no ANTHROPIC_API_KEY[/dim]")
@@ -200,19 +255,17 @@ def check_and_blur_text(clip_path: Path) -> tuple[bool, bool]:
     if not duration or duration < 0.5:
         return False, False
 
-    timestamps = [duration * pct for pct in (0.25, 0.50, 0.75)]
-
     frames = []
-    for ts in timestamps:
-        frame_bytes = _extract_frame(clip_path, ts)
-        if frame_bytes:
-            frames.append(frame_bytes)
+    for pct in (0.25, 0.50, 0.75):
+        fb = _extract_frame(clip_path, duration * pct)
+        if fb:
+            frames.append(fb)
 
     if not frames:
         return False, False
 
     try:
-        result = _ask_claude_regions(frames)
+        result = _ask_claude(frames)
     except Exception as e:
         console.print(f"  [yellow]Subtitle check error: {e}[/yellow]")
         return False, False
@@ -220,29 +273,27 @@ def check_and_blur_text(clip_path: Path) -> tuple[bool, bool]:
     if not result.get("has_text"):
         return False, False
 
-    regions = result.get("regions", [])
-    labels  = [r.get("label", "text") for r in regions]
-    console.print(
-        f"  [yellow]Text detected:[/yellow] {', '.join(labels)} — blurring regions..."
-    )
+    raw_regions = result.get("regions", [])
+    labels = [r.get("label", "text") for r in raw_regions]
 
-    if not regions:
-        # Claude said has_text=true but gave no regions — fall back to blurring bottom 25%
-        regions = [{"y_start": 0.75, "y_end": 1.0}]
+    # Fallback: if Claude said has_text but gave no coordinates, blur bottom 25%
+    if not raw_regions:
+        raw_regions = [{"y_start": 0.75, "y_end": 1.0}]
+        labels = ["text (no coords)"]
+
+    regions = _merge_regions(raw_regions)
+
+    region_desc = "  ".join(
+        f"{r.get('label', 'text')} [{r['y_start']:.0%}–{r['y_end']:.0%}]"
+        for r in result.get("regions", raw_regions)
+    )
+    console.print(f"  [yellow]Text detected:[/yellow] {region_desc}")
+    console.print(f"  Blurring {len(regions)} region(s) (sigma={BLUR_SIGMA}, padding±{BLUR_PADDING:.0%})...")
 
     blur_ok = _blur_regions(clip_path, regions)
     if blur_ok:
-        console.print(f"  [green]Blurred successfully[/green] → {clip_path.name}")
+        console.print(f"  [green]✓ Blurred[/green] {clip_path.name}")
     else:
-        console.print(f"  [red]Blur failed[/red] — keeping clip as-is")
+        console.print(f"  [red]✗ Blur failed[/red] — clip kept as-is")
 
     return True, blur_ok
-
-
-# ---------------------------------------------------------------------------
-# Legacy alias — kept for backwards compatibility
-# ---------------------------------------------------------------------------
-def has_hardcoded_text(clip_path: Path) -> bool:
-    """Legacy function — now blurs instead of discarding. Always returns False."""
-    check_and_blur_text(clip_path)
-    return False
