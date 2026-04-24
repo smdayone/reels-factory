@@ -19,7 +19,11 @@ def get_music_track(duration: float):
     """
     from moviepy.editor import AudioFileClip
 
-    music_files = list(MUSIC_DIR.glob("*.mp3")) + list(MUSIC_DIR.glob("*.wav"))
+    music_files = (
+        list(MUSIC_DIR.rglob("*.mp3")) +
+        list(MUSIC_DIR.rglob("*.wav")) +
+        list(MUSIC_DIR.rglob("*.m4a"))
+    )
     if not music_files:
         console.print("  [yellow]No music in music/ folder — skipping background music[/yellow]")
         console.print("  Tip: Add royalty-free MP3s from pixabay.com/music")

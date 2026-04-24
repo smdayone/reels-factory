@@ -77,8 +77,8 @@ def _encode_args() -> list[str]:
     others → libx264 CRF 18 slow (software, high quality)
     """
     if sys.platform == "darwin":
-        return ["-c:v", "h264_videotoolbox", "-b:v", "8M"]
-    return ["-c:v", "libx264", "-crf", "18", "-preset", "slow"]
+        return ["-c:v", "h264_videotoolbox", "-b:v", "5M"]
+    return ["-c:v", "libx264", "-b:v", "5M", "-preset", "fast"]
 
 
 def apply_hd_filter(output_path: Path) -> Path:
