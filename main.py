@@ -735,7 +735,7 @@ def mode_generate(keyword: str, args) -> None:
             # within-batch repetition (texts added to in-memory history below).
             _TEXT_ASSET_TYPES = [
                 "hook_text", "problem_text", "solution_text", "proof_text",
-                "emotion_text", "plot_hook_text", "plot_reveal_text",
+                "emotion_text", "plot_hook_text", "plot_reveal_text", "caption",
             ]
             recent_texts = {k: history.get_recent(k, n=5) for k in _TEXT_ASSET_TYPES}
             recent_texts = {k: v for k, v in recent_texts.items() if v}  # drop empty
@@ -748,17 +748,42 @@ def mode_generate(keyword: str, args) -> None:
                 recent_texts=recent_texts or None,
             )
             if script:
+                skipped = []
                 for field in _OVERLAY_FIELDS:
-                    if script.get(field):
-                        script[field] = _clean_text(script[field])
+                    val = script.get(field, "")
+                    if val and val.strip().upper() == "SKIP":
+                        script[field] = None
+                        skipped.append(field)
+                    elif val:
+                        script[field] = _clean_text(val)
+                if skipped:
+                    console.print(f"  [dim]Sections skipped (redundant): {', '.join(skipped)}[/dim]")
+
+                # Enforce caption: single line, max 100 chars
+                cap = script.get("caption", "")
+                if cap:
+                    cap = cap.replace("\n", " ").strip()
+                    if len(cap) > 100:
+                        # Trim keeping hashtags: cut body, preserve last 2-3 hashtags
+                        words = cap.split()
+                        hashtags = [w for w in words if w.startswith("#")][-3:]
+                        body_words = [w for w in words if not w.startswith("#")]
+                        body = " ".join(body_words)
+                        suffix = " " + " ".join(hashtags) if hashtags else ""
+                        max_body = 100 - len(suffix)
+                        body = body[:max_body].rsplit(" ", 1)[0]
+                        cap = (body + suffix).strip()
+                    script["caption"] = cap
+
                 console.print(f"  [green]Script generated[/green]  [dim]({SUPPORTED_LANGUAGES[language]})[/dim]")
                 console.print(f"  [bold]Hook:[/bold] {script.get('hook', '')}")
 
-                # Pre-register generated texts into in-memory history so the next
-                # iteration in this batch also benefits from the AVOID REPETITION context.
+                # Pre-register into in-memory history so the next iteration avoids repeating.
                 for field in _OVERLAY_FIELDS:
                     if script.get(field):
                         history.add(f"{field}_text", script[field])
+                if script.get("caption"):
+                    history.add("caption", script["caption"])
 
         script["cta"] = cta_override if cta_override is not None else random.choice(GENERIC_CTAS[language])
 

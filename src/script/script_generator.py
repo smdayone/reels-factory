@@ -44,15 +44,19 @@ OVERLAY RULES (sections 1-5, 7-9):
 - Write in the target language above — cultural adaptation, not literal translation
 - Never mention price, never say buy/purchase/shop/order
 - No superlatives without evidence
+- If a section would be too similar to another section in this same video, write SKIP
+  instead of forcing a weak or redundant line. A skipped section shows no text overlay.
+  Only skip if genuinely necessary — do not skip HOOK or CTA.
 
 CAPTION RULES (section 6):
-- 1-3 lines of engaging copy — DIFFERENT tone every video (rotate: storytelling /
-  rhetorical question / bold statement / relatable confession / list of 3)
-- Write in the target language above
-- Do NOT repeat the hook verbatim
-- End with 5-8 relevant hashtags on a new line: mix international (English) hashtags
-  with hashtags in the target language
-- Emoji allowed, keep it natural
+- SINGLE LINE only — no line breaks anywhere
+- MAX 100 characters TOTAL including the hashtags
+- End with exactly 2-3 hashtags in ALL LOWERCASE (e.g. #myprod #niche #trending)
+- No uppercase letters in hashtags
+- Rotate tone every video — pick ONE angle different from any recent caption:
+  storytelling / rhetorical question / bold claim / relatable confession / surprising fact
+- Do NOT repeat the hook verbatim, do NOT open with "I" or "We"
+- Emoji allowed but counts toward the 100-char limit
 - Never mention price
 
 Output format (one line per section, nothing else):
@@ -114,6 +118,7 @@ def generate_script(
         "EMOTION":     "emotion_text",
         "PLOT_HOOK":   "plot_hook_text",
         "PLOT_REVEAL": "plot_reveal_text",
+        "CAPTION":     "caption",
     }
     if recent_texts:
         avoid_lines = []
@@ -123,7 +128,7 @@ def generate_script(
                 avoid_lines.append(f"{label}: {' | '.join(values)}")
         if avoid_lines:
             prompt += (
-                "\n\nAVOID REPETITION — these overlay texts appeared in recent videos for this product. "
+                "\n\nAVOID REPETITION — these texts appeared in recent videos for this product. "
                 "Do NOT reuse them verbatim or as close paraphrases. Find fresh angles:\n"
                 + "\n".join(avoid_lines)
             )
