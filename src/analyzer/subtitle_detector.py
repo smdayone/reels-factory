@@ -68,45 +68,45 @@ def _extract_frame(video_path: Path, timestamp: float) -> bytes | None:
             tmp.unlink()
 
 
-def _ask_claude(frames: list[bytes]) -> dict:
+_FRAME_PROMPT = (
+    "You are checking a video frame for PROMINENT hardcoded text that would "
+    "visibly distract viewers in a final published video.\n\n"
+    "ONLY flag text that is ALL of the following:\n"
+    "  1. Clearly readable (actual words/numbers, not patterns or graphics)\n"
+    "  2. Prominently sized (text height > 3% of the frame height)\n"
+    "  3. Overlaid ON the video — subtitles, social handle (@user), "
+    "brand name burned in, price tag, countdown timer\n\n"
+    "DO NOT flag:\n"
+    "  - Text that is part of a physical object being filmed (a label, a box, a sign)\n"
+    "  - Tiny watermarks or logos < 3% of frame height\n"
+    "  - Graphics, patterns, or shapes that might look like text\n"
+    "  - Blurry or illegible text\n\n"
+    "If you are not 100% certain text is present, answer NO.\n\n"
+    "If YES, give the vertical position of ONLY the text pixels (tight, no padding):\n"
+    "  y_start = top of text / frame height  (0.0 = top)\n"
+    "  y_end   = bottom of text / frame height  (1.0 = bottom)\n\n"
+    "Reply ONLY with valid JSON, no other text:\n"
+    '{"has_text": false}\n'
+    "or\n"
+    '{"has_text": true, "y_start": 0.83, "y_end": 0.92, "label": "subtitles"}'
+)
+
+
+def _check_single_frame(frame_bytes: bytes) -> dict | None:
     """
-    Ask Claude Vision for exact text region bounding boxes.
-    Returns {"has_text": bool, "regions": [{"y_start": float, "y_end": float}, ...]}
-    All values are fractions of frame height (0.0=top, 1.0=bottom).
+    Check one frame. Returns {"has_text": bool, "y_start"?, "y_end"?, "label"?} or None on error.
     """
-    content = []
-    for frame_bytes in frames:
-        content.append({
+    content = [
+        {
             "type": "image",
             "source": {
                 "type": "base64",
                 "media_type": "image/jpeg",
                 "data": base64.standard_b64encode(frame_bytes).decode(),
             },
-        })
-
-    content.append({
-        "type": "text",
-        "text": (
-            "Analyze these video frames carefully.\n\n"
-            "Find ALL hardcoded text burned into the video image:\n"
-            "  - Subtitles or captions\n"
-            "  - Brand names, product names\n"
-            "  - Social handles (@username) or hashtag overlays\n"
-            "  - Price tags, promo text, countdown timers\n"
-            "  - Any text that is part of the video pixels themselves\n\n"
-            "IGNORE: tiny watermarks smaller than 5% of the frame height.\n\n"
-            "For each text block, measure its vertical position precisely:\n"
-            "  y_start = top edge of text / frame height  (0.0 = very top)\n"
-            "  y_end   = bottom edge of text / frame height (1.0 = very bottom)\n\n"
-            "Be TIGHT: measure exactly where the text starts and ends, "
-            "do not include empty space above/below the text.\n\n"
-            "Reply ONLY with valid JSON — no explanation, no markdown:\n"
-            '{"has_text": false, "regions": []}\n'
-            "or\n"
-            '{"has_text": true, "regions": [{"y_start": 0.82, "y_end": 0.91, "label": "subtitles"}, ...]}'
-        ),
-    })
+        },
+        {"type": "text", "text": _FRAME_PROMPT},
+    ]
 
     resp = httpx.post(
         "https://api.anthropic.com/v1/messages",
@@ -117,22 +117,49 @@ def _ask_claude(frames: list[bytes]) -> dict:
         },
         json={
             "model": VISION_MODEL,
-            "max_tokens": 300,
+            "max_tokens": 100,
             "messages": [{"role": "user", "content": content}],
         },
         timeout=30,
     )
     raw = resp.json()["content"][0]["text"].strip()
-
-    # Strip markdown fences if present
     if "```" in raw:
         parts = raw.split("```")
         raw = parts[1] if len(parts) > 1 else parts[0]
         if raw.startswith("json"):
             raw = raw[4:]
-    raw = raw.strip()
+    return json.loads(raw.strip())
 
-    return json.loads(raw)
+
+def _ask_claude(frames: list[bytes]) -> dict:
+    """
+    Check each frame independently. Blur only if majority (≥2/3) agree text is present.
+    Collects all detected regions from positive frames.
+    Returns {"has_text": bool, "regions": [...]}
+    """
+    positives = []
+    for frame_bytes in frames:
+        try:
+            result = _check_single_frame(frame_bytes)
+            if result and result.get("has_text"):
+                positives.append(result)
+        except Exception:
+            pass  # on error, treat as no-text (fail-open)
+
+    # Require at least 2 out of 3 frames to confirm text
+    if len(positives) < 2:
+        return {"has_text": False, "regions": []}
+
+    regions = [
+        {
+            "y_start": r["y_start"],
+            "y_end":   r["y_end"],
+            "label":   r.get("label", "text"),
+        }
+        for r in positives
+        if "y_start" in r and "y_end" in r
+    ]
+    return {"has_text": True, "regions": regions}
 
 
 def _merge_regions(regions: list[dict]) -> list[dict]:
