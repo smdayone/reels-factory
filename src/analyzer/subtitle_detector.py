@@ -68,45 +68,44 @@ def _extract_frame(video_path: Path, timestamp: float) -> bytes | None:
             tmp.unlink()
 
 
-_FRAME_PROMPT = (
-    "You are checking a video frame for PROMINENT hardcoded text that would "
-    "visibly distract viewers in a final published video.\n\n"
-    "ONLY flag text that is ALL of the following:\n"
-    "  1. Clearly readable (actual words/numbers, not patterns or graphics)\n"
-    "  2. Prominently sized (text height > 3% of the frame height)\n"
-    "  3. Overlaid ON the video — subtitles, social handle (@user), "
-    "brand name burned in, price tag, countdown timer\n\n"
-    "DO NOT flag:\n"
-    "  - Text that is part of a physical object being filmed (a label, a box, a sign)\n"
-    "  - Tiny watermarks or logos < 3% of frame height\n"
-    "  - Graphics, patterns, or shapes that might look like text\n"
-    "  - Blurry or illegible text\n\n"
-    "If you are not 100% certain text is present, answer NO.\n\n"
-    "If YES, give the vertical position of ONLY the text pixels (tight, no padding):\n"
-    "  y_start = top of text / frame height  (0.0 = top)\n"
-    "  y_end   = bottom of text / frame height  (1.0 = bottom)\n\n"
-    "Reply ONLY with valid JSON, no other text:\n"
-    '{"has_text": false}\n'
-    "or\n"
-    '{"has_text": true, "y_start": 0.83, "y_end": 0.92, "label": "subtitles"}'
-)
-
-
-def _check_single_frame(frame_bytes: bytes) -> dict | None:
+def _ask_claude(frames: list[bytes]) -> dict:
     """
-    Check one frame. Returns {"has_text": bool, "y_start"?, "y_end"?, "label"?} or None on error.
+    Single API call with all 3 frames. Conservative prompt — only flags
+    prominent, clearly readable overlaid text. Returns {"has_text": bool, "regions": [...]}
     """
-    content = [
-        {
+    content = []
+    for frame_bytes in frames:
+        content.append({
             "type": "image",
             "source": {
                 "type": "base64",
                 "media_type": "image/jpeg",
                 "data": base64.standard_b64encode(frame_bytes).decode(),
             },
-        },
-        {"type": "text", "text": _FRAME_PROMPT},
-    ]
+        })
+
+    content.append({
+        "type": "text",
+        "text": (
+            "Check these 3 video frames for hardcoded text overlaid on the video.\n\n"
+            "ONLY flag text that meets ALL of these criteria:\n"
+            "  1. Clearly readable words or numbers (not patterns, graphics or shapes)\n"
+            "  2. Prominently sized — text height > 3% of frame height\n"
+            "  3. Digitally overlaid on the video: subtitles, captions, social handle "
+            "(@user), brand name burned in, price tag, countdown timer\n\n"
+            "DO NOT flag:\n"
+            "  - Text on physical objects being filmed (labels, boxes, signs in background)\n"
+            "  - Tiny corner watermarks or logos < 3% of frame height\n"
+            "  - Patterns, shapes or graphics that resemble text\n"
+            "  - Blurry or illegible text\n\n"
+            "Only answer YES if text is clearly present in the majority of frames. "
+            "When in doubt, answer NO.\n\n"
+            "Reply ONLY with valid JSON — no explanation, no markdown:\n"
+            '{"has_text": false, "regions": []}\n'
+            "or\n"
+            '{"has_text": true, "regions": [{"y_start": 0.83, "y_end": 0.92, "label": "subtitles"}]}'
+        ),
+    })
 
     resp = httpx.post(
         "https://api.anthropic.com/v1/messages",
@@ -117,7 +116,7 @@ def _check_single_frame(frame_bytes: bytes) -> dict | None:
         },
         json={
             "model": VISION_MODEL,
-            "max_tokens": 100,
+            "max_tokens": 200,
             "messages": [{"role": "user", "content": content}],
         },
         timeout=30,
@@ -129,37 +128,6 @@ def _check_single_frame(frame_bytes: bytes) -> dict | None:
         if raw.startswith("json"):
             raw = raw[4:]
     return json.loads(raw.strip())
-
-
-def _ask_claude(frames: list[bytes]) -> dict:
-    """
-    Check each frame independently. Blur only if majority (≥2/3) agree text is present.
-    Collects all detected regions from positive frames.
-    Returns {"has_text": bool, "regions": [...]}
-    """
-    positives = []
-    for frame_bytes in frames:
-        try:
-            result = _check_single_frame(frame_bytes)
-            if result and result.get("has_text"):
-                positives.append(result)
-        except Exception:
-            pass  # on error, treat as no-text (fail-open)
-
-    # Require at least 2 out of 3 frames to confirm text
-    if len(positives) < 2:
-        return {"has_text": False, "regions": []}
-
-    regions = [
-        {
-            "y_start": r["y_start"],
-            "y_end":   r["y_end"],
-            "label":   r.get("label", "text"),
-        }
-        for r in positives
-        if "y_start" in r and "y_end" in r
-    ]
-    return {"has_text": True, "regions": regions}
 
 
 def _merge_regions(regions: list[dict]) -> list[dict]:
