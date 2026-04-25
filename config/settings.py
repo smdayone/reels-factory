@@ -139,6 +139,10 @@ CTA_COMMENT_WORD = os.getenv("CTA_COMMENT_WORD", "INFO")
 # Set HD_FILTER=false in .env to disable.
 HD_FILTER_ENABLED = os.getenv("HD_FILTER", "true").lower() == "true"
 
+# Intentional misspelling in overlay texts (engagement hack).
+# "false" = disabled | "true" = always on | "ask" = interactive prompt before each batch
+MISPELLING_MODE = os.getenv("MISPELLING_MODE", "false").lower()
+
 # Clip category keywords for transcript-based classification
 CLIP_KEYWORDS = {
     "hook": [

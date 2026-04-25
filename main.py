@@ -55,6 +55,7 @@ from src.assembler.video_builder import (
 )
 from src.utils.asset_history import AssetHistory
 from src.utils.languages import SUPPORTED_LANGUAGES, GENERIC_CTAS, CTA_TRIGGER_TEMPLATE
+from src.utils.mispelling import apply_mispelling
 
 console = Console()
 
@@ -672,6 +673,20 @@ def mode_generate(keyword: str, args) -> None:
         except (ValueError, IndexError):
             language = "en"
 
+    # ── Mispelling mode ───────────────────────────────────────────────────────
+    from config.settings import MISPELLING_MODE
+    use_mispelling = getattr(args, "mispelling", False)
+    if not use_mispelling:
+        if MISPELLING_MODE == "true":
+            use_mispelling = True
+        elif MISPELLING_MODE == "ask":
+            use_mispelling = Prompt.ask(
+                "\nVuoi applicare un mispelling intenzionale?",
+                choices=["s", "n"], default="n",
+            ) == "s"
+    if use_mispelling:
+        console.print("  [magenta]Mispelling:[/magenta] attivo — un errore per video\n")
+
     total_clips = show_clips_summary(keyword)
 
     if total_clips == 0:
@@ -774,6 +789,19 @@ def mode_generate(keyword: str, args) -> None:
                         body = body[:max_body].rsplit(" ", 1)[0]
                         cap = (body + suffix).strip()
                     script["caption"] = cap
+
+                # Mispelling intenzionale — un errore per video, dopo _clean_text
+                if use_mispelling:
+                    keyword_path = get_keyword_paths(keyword)["base"]
+                    script, mis_entry = apply_mispelling(script, keyword_path, language)
+                    if mis_entry:
+                        console.print(
+                            f"  [magenta][MISPELLING][/magenta] "
+                            f"'{mis_entry['original_word']}' → '{mis_entry['mispelled_word']}' "
+                            f"({mis_entry['method']}, campo: {mis_entry['field']})"
+                        )
+                    else:
+                        console.print("  [dim][MISPELLING] Nessuna parola eleggibile trovata[/dim]")
 
                 console.print(f"  [green]Script generated[/green]  [dim]({SUPPORTED_LANGUAGES[language]})[/dim]")
                 console.print(f"  [bold]Hook:[/bold] {script.get('hook', '')}")
@@ -1161,6 +1189,13 @@ Pipeline (queue multiple runs):
         "--parallel", type=int, default=1,
         metavar="N",
         help="[generate] Number of parallel assembly workers (1-4, default: 1)",
+    )
+    parser.add_argument(
+        "--mispelling",
+        action="store_true",
+        default=False,
+        dest="mispelling",
+        help="[generate] Applica un mispelling intenzionale a un testo overlay per video",
     )
     parser.add_argument(
         "--language", "--lang",
