@@ -367,11 +367,30 @@ def assemble_benefits(
         # ── Step C: text overlays ─────────────────────────────────────────────
         if script:
             rng = _random.Random(variation + 7)     # benefit y positions
-            hook_y = _random.Random(variation + 13).uniform(0.30, 0.50)  # hook position
+            hook_y = _random.Random(variation + 13).uniform(0.20, 0.50)  # hook position
             benefit_keys = ["problem", "solution", "proof"]
             n = len(clips)
             overlay_layers = [final_video]
             last_text_end = 0.0
+
+            # Safe vertical range for benefit texts: 0.12 (top) → 0.68 (bottom)
+            # Avoids status bar area and the CTA zone (0.72+).
+            # Spread rule: each text must be ≥ 0.18 from the previous one.
+            _Y_MIN, _Y_MAX, _Y_MIN_SPREAD = 0.12, 0.68, 0.18
+            _prev_y: float | None = None
+
+            def _next_benefit_y() -> float:
+                nonlocal _prev_y
+                for _ in range(20):  # max attempts
+                    y = rng.uniform(_Y_MIN, _Y_MAX)
+                    if _prev_y is None or abs(y - _prev_y) >= _Y_MIN_SPREAD:
+                        _prev_y = y
+                        return y
+                # Fallback: mirror the previous position across the midpoint
+                y = 0.40 if _prev_y is None else (_Y_MIN + _Y_MAX) / 2 + ((_Y_MIN + _Y_MAX) / 2 - _prev_y)
+                y = max(_Y_MIN, min(_Y_MAX, y))
+                _prev_y = y
+                return y
 
             t = 0.0
             for idx, (clip, dur) in enumerate(zip(clips, clip_durations)):
@@ -394,7 +413,7 @@ def assemble_benefits(
                 elif idx == n - 1:
                     rgba = render_cta_rgba(script.get("cta", ""))
                 else:
-                    y_frac = rng.uniform(0.25, 0.55)
+                    y_frac = _next_benefit_y()
                     key = benefit_keys[(idx - 1) % len(benefit_keys)]
                     rgba = render_benefit_rgba(script.get(key, ""), y_frac)
 
